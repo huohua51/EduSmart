@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">EduSmart 智能学习助手</string>
+    
+    <!-- 主界面 -->
+    <string name="nav_home">首页</string>
+    <string name="nav_ar">AR知识空间</string>
+    <string name="nav_note">智能笔记</string>
+    <string name="nav_speaking">口语私教</string>
+    <string name="nav_radar">知识雷达</string>
+    
+    <!-- 拍照识题 -->
+    <string name="camera_scan_title">拍照识题</string>
+    <string name="camera_scan_hint">对准题目拍照，AI自动识别并匹配答案</string>
+    <string name="scan_result">识别结果</string>
+    <string name="related_questions">相关题目</string>
+    
+    <!-- AR功能 -->
+    <string name="ar_title">AR知识空间</string>
+    <string name="ar_scan_hint">拍摄课本插图，查看3D动态模型</string>
+    <string name="ar_gesture_hint">手势操作：旋转、缩放、拆解</string>
+    
+    <!-- 笔记功能 -->
+    <string name="note_title">智能笔记精灵</string>
+    <string name="note_camera">拍摄黑板</string>
+    <string name="note_record">开始录音</string>
+    <string name="note_stop">停止录音</string>
+    <string name="note_auto_merge">自动合并笔记</string>
+    
+    <!-- 口语功能 -->
+    <string name="speaking_title">AI口语私教</string>
+    <string name="speaking_scene">选择场景</string>
+    <string name="speaking_start">开始对话</string>
+    <string name="speaking_score">发音评分</string>
+    
+    <!-- 知识雷达 -->
+    <string name="radar_title">学科知识雷达</string>
+    <string name="radar_quick_test">快速测评</string>
+    <string name="radar_weakness">薄弱点分析</string>
+    <string name="radar_progress">进步曲线</string>
+    
+    <!-- 通用 -->
+    <string name="confirm">确认</string>
+    <string name="cancel">取消</string>
+    <string name="save">保存</string>
+    <string name="delete">删除</string>
+    <string name="retry">重试</string>
+    <string name="loading">加载中...</string>
+    <string name="error_network">网络错误，请检查网络连接</string>
+    <string name="error_camera">相机权限被拒绝</string>
+    <string name="error_audio">录音权限被拒绝</string>
+</resources>
