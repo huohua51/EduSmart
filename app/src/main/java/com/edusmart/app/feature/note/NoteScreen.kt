@@ -1,38 +1,86 @@
 package com.edusmart.app.feature.note
 
+import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-<<<<<<< Updated upstream
-=======
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
->>>>>>> Stashed changes
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.core.content.ContextCompat
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.rememberMultiplePermissionsState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.edusmart.app.feature.note.AudioRecordService
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.edusmart.app.EduSmartApplication
+import com.edusmart.app.data.entity.NoteEntity
+import com.edusmart.app.repository.NoteRepository
+import com.edusmart.app.service.AIService
+import com.edusmart.app.service.NoteSummary
+import com.edusmart.app.service.OCRService
 import com.edusmart.app.service.SpeechService
+import com.edusmart.app.ui.components.CameraPreview
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import java.io.File
+import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.*
 
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
 fun NoteScreen() {
     val context = LocalContext.current
+    val application = context.applicationContext as EduSmartApplication
     val scope = rememberCoroutineScope()
-    val speechService = remember { SpeechService(context) }
     
+    // 录音权限
+    val audioPermissionState = rememberMultiplePermissionsState(
+        permissions = listOf(
+            Manifest.permission.RECORD_AUDIO
+        )
+    )
+    
+    // 延迟初始化服务，避免阻塞主线程
+    val noteRepository = remember {
+        NoteRepository(
+            noteDao = application.database.noteDao(),
+            ocrService = OCRService(),
+            speechService = SpeechService(context),
+            aiService = AIService()
+        )
+    }
+    // 使用 lazy 延迟初始化 ViewModel，减少启动时的开销
+    val viewModel = remember {
+        NoteViewModel(noteRepository)
+    }
+    
+    val notes by viewModel.notes.collectAsState()
+    val subjects by viewModel.subjects.collectAsState()
+    val selectedSubject by viewModel.selectedSubject.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
+    val errorMessage by viewModel.errorMessage.collectAsState()
+    
+    // 状态管理
     var isRecording by remember { mutableStateOf(false) }
     var isTranscribing by remember { mutableStateOf(false) }
-<<<<<<< Updated upstream
-=======
     var isRecognizing by remember { mutableStateOf(false) }
     var isShowingCamera by remember { mutableStateOf(false) }
     var isShowingEdit by remember { mutableStateOf(false) }
@@ -58,14 +106,9 @@ fun NoteScreen() {
     
     var capturedImagePath by remember { mutableStateOf<String?>(null) }
     var ocrResult by remember { mutableStateOf<String?>(null) }
->>>>>>> Stashed changes
     var transcriptResult by remember { mutableStateOf<String?>(null) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    var notes by remember { mutableStateOf<List<String>>(emptyList()) }
+    var currentAudioPath by remember { mutableStateOf<String?>(null) }
     
-<<<<<<< Updated upstream
-    Column(
-=======
     // AI功能状态
     var aiPolishedContent by remember { mutableStateOf<String?>(null) }
     var aiSummary by remember { mutableStateOf<NoteSummary?>(null) }
@@ -286,44 +329,29 @@ fun NoteScreen() {
     )
     
     Box(
->>>>>>> Stashed changes
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+            .background(
+                brush = Brush.linearGradient(
+                    colors = gradientColors,
+                    start = androidx.compose.ui.geometry.Offset(0f, 0f),
+                    end = androidx.compose.ui.geometry.Offset(1000f, 1000f)
+                )
+            )
     ) {
-<<<<<<< Updated upstream
-        Text(
-            text = "智能笔记精灵",
-            style = MaterialTheme.typography.headlineMedium
-        )
-        
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-=======
     Column(
         modifier = Modifier
             .fillMaxSize()
                 .padding(20.dp)
->>>>>>> Stashed changes
         ) {
-            Button(
-                onClick = { /* TODO: 打开相机拍摄黑板 */ },
-                modifier = Modifier.weight(1f)
+            // 标题区域
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-<<<<<<< Updated upstream
-                Text("拍摄黑板")
-            }
-            
-            Button(
-                onClick = { 
-                    if (!isRecording) {
-                        // 开始录音
-                        val intent = Intent(context, AudioRecordService::class.java).apply {
-                            action = AudioRecordService.ACTION_START_RECORDING
-=======
                 Column(modifier = Modifier.weight(1f)) {
         Text(
                         text = "AI笔记",
@@ -856,18 +884,8 @@ fun NoteScreen() {
                                     )
                                 }
                             }
->>>>>>> Stashed changes
                         }
-                        context.startForegroundService(intent)
-                        isRecording = true
-                        errorMessage = null
-                        transcriptResult = null
                     } else {
-<<<<<<< Updated upstream
-                        // 停止录音
-                        val intent = Intent(context, AudioRecordService::class.java).apply {
-                            action = AudioRecordService.ACTION_STOP_RECORDING
-=======
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(vertical = 8.dp),
@@ -1052,83 +1070,36 @@ fun NoteScreen() {
                                     isProcessing = aiProcessingNoteId == note.id
                                 )
                             }
->>>>>>> Stashed changes
                         }
-                        context.startService(intent)
-                        isRecording = false
-                        
-                        // 等待录音文件生成后转写
-                        // 注意：实际应该通过BroadcastReceiver接收录音完成事件
-                        // 这里简化处理，需要手动触发转写
                     }
-                },
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isRecording) 
-                        MaterialTheme.colorScheme.error 
-                    else 
-                        MaterialTheme.colorScheme.primary
-                )
-            ) {
-                Text(if (isRecording) "停止录音" else "开始录音")
-            }
-        }
-        
-        // 录音中提示
-        if (isRecording) {
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text("正在录音中...")
                 }
             }
         }
-        
-        // 转写中提示
-        if (isTranscribing) {
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text("正在转写中...")
+    }
+    
+    // 相机界面
+    if (isShowingCamera) {
+        CameraPreview(
+            onImageCaptured = { imagePath ->
+                isShowingCamera = false
+                capturedImagePath = imagePath
+                scope.launch {
+                    try {
+                        isRecognizing = true
+                        val result = viewModel.recognizeImage(imagePath)
+                        ocrResult = result
+                    } catch (e: Exception) {
+                        // 错误已在ViewModel中处理
+                    } finally {
+                        isRecognizing = false
+                    }
                 }
-<<<<<<< Updated upstream
-            }
-        }
-        
-        // 转写结果
-        transcriptResult?.let { result ->
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-=======
             },
             onCancel = { isShowingCamera = false },
-            onPickFromGallery = { /* 暂不支持：需要时可在 NoteScreen 里接入相册选择逻辑 */ }
+            onPickFromGallery = {
+                // TODO: 实现从相册选择图片的功能
+                isShowingCamera = false
+            }
         )
     }
     
@@ -1205,29 +1176,15 @@ fun NoteScreen() {
                     },
                     style = MaterialTheme.typography.titleLarge,
                     color = Color(0xFF2D5016)
->>>>>>> Stashed changes
                 )
-            ) {
+            },
+            text = {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-<<<<<<< Updated upstream
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "转写结果",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        TextButton(
-                            onClick = { 
-                                transcriptResult = null
-                                notes = notes + result
-=======
                     // 润色结果
                     aiPolishedContent?.let { polished ->
                     Text(
@@ -1390,29 +1347,11 @@ fun NoteScreen() {
                                 scope.launch {
                                     applyPolishedContent(note)
                                 }
->>>>>>> Stashed changes
                             }
                         ) {
-                            Text("保存到笔记")
+                            Text("应用", color = Color(0xFF2D5016))
                         }
                     }
-<<<<<<< Updated upstream
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = result,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
-                    )
-                }
-            }
-        }
-        
-        // 错误提示
-        errorMessage?.let { error ->
-            Card(
-=======
                     aiSummary != null -> {
                         TextButton(
                             onClick = {
@@ -1658,111 +1597,152 @@ fun NoteItem(
             modifier = Modifier.padding(16.dp)
         ) {
             Row(
->>>>>>> Stashed changes
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer
-                )
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "错误",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = error,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                }
-            }
-        }
-        
-        // 测试按钮（用于测试语音转写）
-        Button(
-            onClick = {
-                // 测试转写功能（需要先有录音文件）
-                scope.launch {
-                    try {
-                        isTranscribing = true
-                        errorMessage = null
-                        
-                        // 查找最新的录音文件
-                        val audioDir = File(context.getExternalFilesDir("audio")?.absolutePath ?: "")
-                        val audioFiles = audioDir.listFiles()?.filter { it.name.endsWith(".m4a") || it.name.endsWith(".pcm") }
-                        val latestFile = audioFiles?.maxByOrNull { it.lastModified() }
-                        
-                        if (latestFile != null && latestFile.exists()) {
-                            val result = speechService.transcribe(latestFile.absolutePath)
-                            transcriptResult = result
-                        } else {
-                            errorMessage = "未找到录音文件，请先录音"
-                        }
-                    } catch (e: Exception) {
-                        errorMessage = "转写失败: ${e.message}"
-                    } finally {
-                        isTranscribing = false
-                    }
-                }
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("测试转写（需要先录音）")
-        }
-        
-        Button(
-            onClick = { /* TODO: 自动合并笔记 */ },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("自动合并笔记")
-        }
-        
-        // 笔记列表
-        if (notes.isNotEmpty()) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Text(
-                        text = "我的笔记",
+                        text = note.title,
                         style = MaterialTheme.typography.titleMedium
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    notes.forEachIndexed { index, note ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = note,
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(vertical = 4.dp)
-                            )
-                            TextButton(
-                                onClick = { 
-                                    notes = notes.filterIndexed { i, _ -> i != index }
-                                }
-                            ) {
-                                Text("删除")
-                            }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "${note.subject} • ${dateFormat.format(Date(note.createdAt))}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+                Box {
+                    if (isProcessing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            color = Color(0xFF2D5016),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(Icons.Default.MoreVert, "更多")
                         }
+                    }
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("编辑") },
+                            onClick = {
+                                showMenu = false
+                                onEdit()
+                            },
+                            leadingIcon = { Icon(Icons.Default.Edit, null) }
+                        )
+                        Divider()
+                        DropdownMenuItem(
+                            text = { Text("AI润色") },
+                            onClick = {
+                                showMenu = false
+                                onPolish()
+                            },
+                            leadingIcon = { Icon(Icons.Default.EditNote, null) },
+                            enabled = !isProcessing
+                        )
+                        DropdownMenuItem(
+                            text = { Text("AI总结") },
+                            onClick = {
+                                showMenu = false
+                                onSummarize()
+                            },
+                            leadingIcon = { Icon(Icons.Default.Description, null) },
+                            enabled = !isProcessing
+                        )
+                        DropdownMenuItem(
+                            text = { Text("生成标题") },
+                            onClick = {
+                                showMenu = false
+                                onGenerateTitle()
+                            },
+                            leadingIcon = { Icon(Icons.Default.TextFields, null) },
+                            enabled = !isProcessing
+                        )
+                        DropdownMenuItem(
+                            text = { Text("增强知识点") },
+                            onClick = {
+                                showMenu = false
+                                onEnhancePoints()
+                            },
+                            leadingIcon = { Icon(Icons.Default.Star, null) },
+                            enabled = !isProcessing
+                        )
+                        Divider()
+                        DropdownMenuItem(
+                            text = { Text("分享") },
+                            onClick = {
+                                showMenu = false
+                                onShare()
+                            },
+                            leadingIcon = { Icon(Icons.Default.Share, null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("导出PDF") },
+                            onClick = {
+                                showMenu = false
+                                onExportPdf()
+                            },
+                            leadingIcon = { Icon(Icons.Default.PictureAsPdf, null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("导出图片") },
+                            onClick = {
+                                showMenu = false
+                                onExportImage()
+                            },
+                            leadingIcon = { Icon(Icons.Default.Image, null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("删除") },
+                            onClick = {
+                                showMenu = false
+                                onDelete()
+                            },
+                            leadingIcon = { Icon(Icons.Default.Delete, null) }
+                        )
+                    }
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            Text(
+                text = note.content.take(200) + if (note.content.length > 200) "..." else "",
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 3
+            )
+            
+            if (!note.knowledgePoints.isNullOrEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    note.knowledgePoints.take(3).forEach { point ->
+                        AssistChip(
+                            onClick = { },
+                            label = { 
+                                Text(
+                                    point, 
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontSize = 11.sp
+                                ) 
+                            },
+                            colors = AssistChipDefaults.assistChipColors(
+                                containerColor = Color(0xFFE8F5E9),
+                                labelColor = Color(0xFF2D5016)
+                            )
+                        )
                     }
                 }
             }
         }
     }
 }
-
