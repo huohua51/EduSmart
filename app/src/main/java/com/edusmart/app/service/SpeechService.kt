@@ -37,9 +37,30 @@ class SpeechService(private val context: Context) {
      * @return 转写文本
      */
     suspend fun transcribe(audioPath: String): String = withContext(Dispatchers.IO) {
+        android.util.Log.d("SpeechService", "开始转写音频: $audioPath")
         try {
+            // 检查文件是否存在
+            val audioFile = File(audioPath)
+            if (!audioFile.exists()) {
+                throw Exception("音频文件不存在: $audioPath")
+            }
+            android.util.Log.d("SpeechService", "音频文件存在，大小: ${audioFile.length()} bytes")
+            
             // 方案1: 使用SparkChain SDK（讯飞新版，推荐）
-            transcribeWithSparkChain(audioPath)
+            try {
+                android.util.Log.d("SpeechService", "尝试使用SparkChain SDK转写")
+                val result = transcribeWithSparkChain(audioPath)
+                android.util.Log.d("SpeechService", "SparkChain转写成功，结果长度: ${result.length}")
+                return@withContext result
+            } catch (e: UnsatisfiedLinkError) {
+                android.util.Log.w("SpeechService", "SparkChain本地库未加载", e)
+                // 本地库加载失败，返回友好的错误信息
+                throw Exception("语音转写功能暂时不可用：SparkChain SDK本地库未正确加载。\n\n录音文件已保存，您可以手动输入笔记内容。")
+            } catch (e: Exception) {
+                android.util.Log.w("SpeechService", "SparkChain转写失败: ${e.message}", e)
+                // 如果SparkChain失败，抛出异常让上层处理
+                throw Exception("语音转写失败: ${e.message}\n\n录音文件已保存，您可以手动输入笔记内容。")
+            }
             
             // 方案2: 使用旧版讯飞SDK（如果已集成）
             // transcribeWithXunfei(audioPath)
@@ -47,6 +68,7 @@ class SpeechService(private val context: Context) {
             // 方案3: 使用百度SDK（需要网络）
             // transcribeWithBaidu(audioPath)
         } catch (e: Exception) {
+            android.util.Log.e("SpeechService", "语音转写失败", e)
             e.printStackTrace()
             throw Exception("语音转写失败: ${e.message}", e)
         }

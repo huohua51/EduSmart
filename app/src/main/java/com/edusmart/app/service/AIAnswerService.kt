@@ -34,7 +34,7 @@ class AIAnswerService {
         .build()
     
     /**
-     * 使用豆包API回答问题
+     * 回答问题（优先使用通义千问多模态，如果未配置则使用豆包）
      * 
      * @param questionText OCR识别出的题目文本
      * @param imagePath 题目图片路径（可选，用于图片识别）
@@ -45,13 +45,17 @@ class AIAnswerService {
         imagePath: String? = null
     ): AIAnswerResult = withContext(Dispatchers.IO) {
         try {
-            // 构建提示词
+            // 优先使用通义千问（支持多模态）
+            if (SDKConfig.TONGYI_API_KEY != "your-tongyi-api-key" && 
+                SDKConfig.TONGYI_API_KEY.isNotEmpty()) {
+                android.util.Log.d("AIAnswerService", "使用通义千问多模态API...")
+                return@withContext answerQuestionWithTongyi(questionText, imagePath)
+            }
+            
+            // 回退到豆包API
+            android.util.Log.d("AIAnswerService", "使用豆包API...")
             val prompt = buildPrompt(questionText)
-            
-            // 调用豆包API
             val response = callDoubaoAPI(prompt, imagePath)
-            
-            // 解析响应
             parseAIResponse(response)
         } catch (e: Exception) {
             AIAnswerResult(
@@ -60,6 +64,35 @@ class AIAnswerService {
                 steps = emptyList(),
                 isError = true
             )
+        }
+    }
+    
+    /**
+     * 使用通义千问多模态API回答问题（支持图片输入）
+     * 
+     * @param questionText OCR识别出的题目文本
+     * @param imagePath 题目图片路径（可选，用于图片识别）
+     * @return AI生成的答案和解析
+     */
+    private suspend fun answerQuestionWithTongyi(
+        questionText: String,
+        imagePath: String? = null
+    ): AIAnswerResult = withContext(Dispatchers.IO) {
+        try {
+            val prompt = buildPrompt(questionText)
+            val response = callTongyiMultimodalAPI(prompt, imagePath)
+            parseTongyiResponse(response)
+        } catch (e: Exception) {
+            android.util.Log.e("AIAnswerService", "通义千问调用失败: ${e.message}", e)
+            // 如果通义千问失败，回退到豆包
+            if (SDKConfig.DOUBAO_API_KEY != "your-doubao-api-key") {
+                android.util.Log.d("AIAnswerService", "回退到豆包API...")
+                val fallbackPrompt = buildPrompt(questionText)
+                val fallbackResponse = callDoubaoAPI(fallbackPrompt, null)
+                parseAIResponse(fallbackResponse)
+            } else {
+                throw e
+            }
         }
     }
     
@@ -164,36 +197,16 @@ class AIAnswerService {
         val messages = org.json.JSONArray()
         val message = JSONObject()
         
+        // 暂时只使用文本输入，避免 JSONArray 类型问题
+        // TODO: 如果豆包 API 支持多模态，可以后续添加图片支持
+        message.put("role", "user")
+        message.put("content", prompt)
+        
+        // 如果提供了图片路径，在提示词中说明（让 AI 知道有图片）
         if (imagePath != null) {
-            // 如果提供了图片，使用多模态输入（如果API支持）
-            try {
-                val content = org.json.JSONArray()
-                
-                // 文本部分
-                val textPart = JSONObject()
-                textPart.put("type", "text")
-                textPart.put("text", prompt)
-                content.put(textPart)
-                
-                // 图片部分（如果API支持图片输入）
-                val imagePart = JSONObject()
-                imagePart.put("type", "image_url")
-                val imageUrl = JSONObject()
-                imageUrl.put("url", "data:image/jpeg;base64,${imageToBase64(imagePath)}")
-                imagePart.put("image_url", imageUrl)
-                content.put(imagePart)
-                
-                message.put("role", "user")
-                message.put("content", content)
-            } catch (e: Exception) {
-                // 如果图片处理失败，只发送文本
-                message.put("role", "user")
-                message.put("content", "$prompt\n\n（题目图片已包含，请根据题目内容解答）")
-            }
-        } else {
-            // 纯文本输入
-            message.put("role", "user")
-            message.put("content", prompt)
+            // 注意：这里暂时不发送图片，只发送文本
+            // 如果后续需要支持图片，需要确认豆包 API 的多模态格式
+            android.util.Log.d("AIAnswerService", "图片路径已提供: $imagePath，但暂时只发送文本")
         }
         
         messages.put(message)
@@ -315,6 +328,118 @@ class AIAnswerService {
         }
         
         return text.substring(contentStart, contentEnd).trim()
+    }
+    
+    /**
+     * 调用通义千问多模态API（支持图片输入）
+     * 使用 Qwen-VL 系列模型
+     */
+    private suspend fun callTongyiMultimodalAPI(
+        prompt: String,
+        imagePath: String?
+    ): String = withContext(Dispatchers.IO) {
+        val apiKey = SDKConfig.TONGYI_API_KEY
+        if (apiKey == "your-tongyi-api-key" || apiKey.isEmpty()) {
+            throw IllegalArgumentException("请先在 SDKConfig.kt 中配置通义千问API密钥")
+        }
+        
+        // 使用 OpenAI 兼容格式的 API（支持多模态）
+        val url = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+        
+        val json = JSONObject()
+        // 使用 Qwen-VL 多模态模型
+        json.put("model", "qwen-vl-max")  // 或者 "qwen-vl-plus"
+        
+        val messages = org.json.JSONArray()
+        val message = JSONObject()
+        message.put("role", "user")
+        
+        if (imagePath != null) {
+            // 多模态输入：content 是数组，包含文本和图片
+            try {
+                val base64Image = imageToBase64(imagePath)
+                val content = org.json.JSONArray()
+                
+                // 文本部分
+                val textPart = JSONObject()
+                textPart.put("type", "text")
+                textPart.put("text", prompt)
+                content.put(textPart)
+                
+                // 图片部分
+                val imagePart = JSONObject()
+                imagePart.put("type", "image_url")
+                val imageUrl = JSONObject()
+                imageUrl.put("url", "data:image/jpeg;base64,$base64Image")
+                imagePart.put("image_url", imageUrl)
+                content.put(imagePart)
+                
+                // 注意：通义千问的 OpenAI 兼容格式支持直接放入 JSONArray
+                message.put("content", content)
+                android.util.Log.d("AIAnswerService", "✅ 使用通义千问多模态（文本+图片）")
+            } catch (e: Exception) {
+                android.util.Log.w("AIAnswerService", "图片处理失败，改用纯文本: ${e.message}")
+                message.put("content", prompt)
+            }
+        } else {
+            // 纯文本输入
+            message.put("content", prompt)
+        }
+        
+        messages.put(message)
+        json.put("messages", messages)
+        json.put("temperature", 0.7)
+        json.put("max_tokens", 2000)
+        
+        val requestBody = json.toString().toRequestBody("application/json".toMediaType())
+        android.util.Log.d("AIAnswerService", "请求体: ${json.toString().take(500)}...")
+        
+        val request = Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer $apiKey")
+            .header("Content-Type", "application/json")
+            .post(requestBody)
+            .build()
+        
+        val response = client.newCall(request).execute()
+        
+        if (!response.isSuccessful) {
+            val errorBody = response.body?.string() ?: ""
+            throw IOException("通义千问API调用失败: ${response.code} ${response.message}\n$errorBody")
+        }
+        
+        response.body?.string() ?: throw IOException("响应体为空")
+    }
+    
+    /**
+     * 解析通义千问API响应（OpenAI兼容格式）
+     */
+    private fun parseTongyiResponse(responseJson: String): AIAnswerResult {
+        try {
+            val json = JSONObject(responseJson)
+            
+            // OpenAI 兼容格式：{"choices": [{"message": {"content": "..."}}]}
+            val choices = json.getJSONArray("choices")
+            if (choices.length() == 0) {
+                throw IOException("通义千问响应中没有内容")
+            }
+            
+            val firstChoice = choices.getJSONObject(0)
+            val message = firstChoice.getJSONObject("message")
+            val content = message.getString("content")
+            
+            // 解析答案、步骤等
+            return parseAnswerContent(content)
+        } catch (e: Exception) {
+            android.util.Log.e("AIAnswerService", "解析通义千问响应失败: ${e.message}", e)
+            // 如果解析失败，返回原始内容
+            return AIAnswerResult(
+                answer = responseJson,
+                explanation = "通义千问响应解析失败，显示原始内容",
+                steps = emptyList(),
+                isError = false
+            )
+        }
     }
     
     /**

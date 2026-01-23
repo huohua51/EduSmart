@@ -15,6 +15,12 @@ interface NoteDao {
     @Query("SELECT * FROM notes WHERE id = :id")
     suspend fun getNoteById(id: String): NoteEntity?
     
+    @Query("SELECT * FROM notes WHERE title LIKE :keyword OR content LIKE :keyword OR transcript LIKE :keyword ORDER BY updatedAt DESC")
+    suspend fun searchNotes(keyword: String): List<NoteEntity>
+    
+    @Query("SELECT DISTINCT subject FROM notes ORDER BY subject")
+    suspend fun getAllSubjects(): List<String>
+    
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertNote(note: NoteEntity)
     

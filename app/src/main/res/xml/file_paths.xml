@@ -3,5 +3,6 @@
     <external-files-path name="images" path="images/" />
     <external-files-path name="notes" path="notes/" />
     <external-files-path name="audio" path="audio/" />
+    <external-files-path name="exports" path="exports/" />
     <cache-path name="cache" path="." />
 </paths>

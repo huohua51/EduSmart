@@ -2,23 +2,58 @@ package com.edusmart.app.repository
 
 import com.edusmart.app.data.dao.KnowledgePointDao
 import com.edusmart.app.data.dao.TestRecordDao
+import com.edusmart.app.data.dao.WrongQuestionDao
 import com.edusmart.app.data.entity.KnowledgePointEntity
 import com.edusmart.app.data.entity.TestRecordEntity
+import com.edusmart.app.data.entity.WrongQuestionEntity
 import com.edusmart.app.service.AIService
 import com.edusmart.app.service.OCRService
+import com.edusmart.app.service.ExamPaperAnalysisService
+import com.edusmart.app.service.WrongQuestionInfo
 import kotlinx.coroutines.flow.Flow
+import org.json.JSONArray
 import java.util.UUID
 
 class RadarRepository(
     private val knowledgePointDao: KnowledgePointDao,
     private val testRecordDao: TestRecordDao,
+    private val wrongQuestionDao: WrongQuestionDao,
     private val ocrService: OCRService,
-    private val aiService: AIService
+    private val aiService: AIService,
+    private val examPaperAnalysisService: ExamPaperAnalysisService
 ) {
     
     fun getKnowledgePointsBySubject(subject: String): Flow<List<KnowledgePointEntity>> {
         return knowledgePointDao.getKnowledgePointsBySubject(subject)
     }
+
+    /**
+     * 批量添加错题到错题本
+     */
+    suspend fun batchAddWrongQuestions(wrongQuestions: List<WrongQuestionInfo>, imagePath: String) {
+        wrongQuestions.forEach { wrongQuestion ->
+            val entity = WrongQuestionEntity(
+                id = UUID.randomUUID().toString(),
+                questionText = wrongQuestion.questionText,
+                answer = wrongQuestion.correctAnswer,
+                steps = JSONArray(listOf(wrongQuestion.correctAnswer)).toString(),
+                knowledgePoints = JSONArray(wrongQuestion.knowledgePoints).toString(),
+                analysis = "试卷错题",
+                imagePath = imagePath,
+                userAnswer = wrongQuestion.studentAnswer,
+                wrongReason = "试卷中的错题"
+            )
+            wrongQuestionDao.insertWrongQuestion(entity)
+        }
+    }
+
+    /**
+     * 获取所有错题
+     */
+    fun getAllWrongQuestions(): Flow<List<WrongQuestionEntity>> {
+        return wrongQuestionDao.getAllWrongQuestions()
+    }
+
     
     /**
      * 分析成绩单

@@ -7,6 +7,7 @@ import com.edusmart.app.data.entity.WrongQuestionEntity
 import com.edusmart.app.service.AIService
 import com.edusmart.app.service.OCRService
 import kotlinx.coroutines.flow.Flow
+import org.json.JSONArray
 import java.util.UUID
 
 class QuestionRepository(
@@ -76,9 +77,32 @@ class QuestionRepository(
      * 添加到错题本
      */
     suspend fun addToWrongQuestions(questionId: String, userAnswer: String?, wrongReason: String?) {
+        val question = questionDao.getQuestionById(questionId) ?: return
+
+        // 将解题步骤转换为JSON数组格式
+        val stepsJson = try {
+            // 如果solution包含换行符，按行分割；否则作为单个步骤
+            val stepsList = if (question.solution.contains("\n")) {
+                question.solution.split("\n").filter { it.isNotBlank() }
+            } else {
+                listOf(question.solution)
+            }
+            JSONArray(stepsList).toString()
+        } catch (e: Exception) {
+            JSONArray(listOf(question.solution)).toString()
+        }
+
+        // 将知识点列表转换为JSON数组格式
+        val knowledgePointsJson = JSONArray(question.knowledgePoints).toString()
+
         val wrongQuestion = WrongQuestionEntity(
             id = UUID.randomUUID().toString(),
-            questionId = questionId,
+            questionText = question.content,
+            answer = question.answer,
+            steps = stepsJson,
+            knowledgePoints = knowledgePointsJson,
+            analysis = wrongReason ?: "",
+            imagePath = question.imageUrl,
             userAnswer = userAnswer,
             wrongReason = wrongReason
         )

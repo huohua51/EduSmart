@@ -19,6 +19,16 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+        
+        // NDK配置 - 支持SparkChain SDK所需的架构
+        // 注意：x86 和 x86_64 架构的 .so 文件可能不正确，暂时只支持 ARM 架构
+        // 如果需要在模拟器上测试，请确保有正确的 x86_64 架构文件
+        ndk {
+            // 只支持 ARM 架构（真机设备）
+            // 如果需要支持模拟器，请确保 x86_64 目录下有正确的文件
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+            // abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")  // 取消注释以支持所有架构
+        }
     }
 
     buildTypes {
@@ -50,6 +60,14 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.3"
     }
+    
+    // 明确指定 jniLibs 源目录，确保 .so 文件被正确包含
+    sourceSets {
+        getByName("main") {
+            // 使用 file() 确保路径正确，相对于项目根目录
+            jniLibs.srcDirs(file("src/main/jniLibs"))
+        }
+    }
 
     packaging {
         resources {
@@ -61,12 +79,17 @@ android {
             excludes += "/META-INF/NOTICE"
             excludes += "/META-INF/NOTICE.txt"
         }
-        // 包含原生库（.so 文件）
+        // 原生库（.so 文件）打包配置
         jniLibs {
+            // 使用传统打包方式，确保 .so 文件被正确打包到 lib/ 目录
+            // 对于某些 AGP 版本，useLegacyPackaging = true 更可靠
             useLegacyPackaging = true
             // 确保包含所有架构的 .so 文件
+            // 如果多个 AAR 包含相同的 .so 文件，使用 pickFirsts 选择第一个
             pickFirsts += "**/libSparkChain.so"
             pickFirsts += "**/libspark.so"
+            // 确保不排除任何 .so 文件
+            // 注意：不要使用 excludes，这会排除 .so 文件
         }
     }
 }

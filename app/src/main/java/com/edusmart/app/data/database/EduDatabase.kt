@@ -14,9 +14,10 @@ import com.edusmart.app.data.entity.*
         NoteEntity::class,
         KnowledgePointEntity::class,
         TestRecordEntity::class,
-        SpeakingRecordEntity::class
+        SpeakingRecordEntity::class,
+        PracticeRecordEntity::class
     ],
-    version = 1,
+    version = 3,
     exportSchema = false
 )
 @androidx.room.TypeConverters(Converters::class)
@@ -27,6 +28,7 @@ abstract class EduDatabase : RoomDatabase() {
     abstract fun knowledgePointDao(): KnowledgePointDao
     abstract fun testRecordDao(): TestRecordDao
     abstract fun speakingRecordDao(): SpeakingRecordDao
+    abstract fun practiceRecordDao(): PracticeRecordDao
 
     companion object {
         @Volatile
