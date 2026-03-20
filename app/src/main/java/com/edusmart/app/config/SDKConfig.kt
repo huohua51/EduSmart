@@ -15,9 +15,9 @@ object SDKConfig {
     // 注册地址: https://www.xfyun.cn/
     // 文档: https://www.xfyun.cn/doc/asr/android-sdk.html
     // 获取方式: 登录控制台 https://console.xfyun.cn/services/iat 查看三元组
-    const val XUNFEI_APP_ID = "d84681e5"
-    const val XUNFEI_API_KEY = "a46af60f99fb72f8ad2880ccfb59c0f5"
-    const val XUNFEI_API_SECRET = "ZmI1Y2MxNTFiOTUzYmY2OWQ2NmQ1OGU5"
+    const val XUNFEI_APP_ID = "bddbdddc"
+    const val XUNFEI_API_KEY = "7e5660798385addf9d13b73cde5eb6d0"
+    const val XUNFEI_API_SECRET = "ZjM4ZTE1OThmNGIyOTA5MTFmN2EwNmUz"
     
     // ========== 百度SDK配置 ==========
     // 注册地址: https://ai.baidu.com/
@@ -26,30 +26,13 @@ object SDKConfig {
     const val BAIDU_SECRET_KEY = "your-baidu-secret-key"
     
     // ========== AI服务配置 ==========
-    
-    // ========== 豆包API配置（字节跳动）==========
-    // 
-    // 📝 配置步骤：
-    // 1. 访问 https://www.volcengine.com/product/doubao 注册/登录账号
-    // 2. 进入控制台 https://console.volcengine.com/
-    // 3. 创建智能体（Bot），获取 API Key（格式：sk-xxxxxxxx 或 xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx）
-    // 4. 获取智能体ID（格式：bot-xxxxxxxx-xxxxx）
-    // 5. 将下面的 "your-doubao-api-key" 替换为你的 API Key
-    // 6. 将下面的 "your-bot-id" 替换为你的智能体ID
-    //
-    // 📚 详细配置指南：请查看项目根目录下的 "豆包API详细配置指南.md"
-    // 🔗 官方文档: https://www.volcengine.com/docs/82379
-    //
-    // ⚠️ 注意：API Key 是敏感信息，不要提交到公开的代码仓库！
-    //
-    // ⚠️ 重要：如果控制台显示的是 UUID 格式的 API Key，请使用该 UUID
-    // 如果控制台显示的是 "sk-" 开头的 API Key，请使用 "sk-" 开头的格式
-    const val DOUBAO_API_KEY = "d8ded741-2441-4ace-8e2f-b1eabc0fcb6f"  // API Key (UUID格式)
-    // Bot ID 是智能体的ID，格式通常是 "bot-xxxxxxxx-xxxxx"
-    // 在智能体详情页可以找到
-    const val DOUBAO_BOT_ID = "bot-20260115210659-jvj9l" // 智能体ID，请替换为你的智能体ID
-    // 保留 MODEL_ID 用于兼容，但实际使用 BOT_ID
-    const val DOUBAO_MODEL_ID = "doubao-pro-32k" // 已废弃，保留用于兼容
+
+    // ========== 豆包TTS语音合成配置 ==========
+    // 官方文档: https://www.volcengine.com/docs/6561/79824
+    const val DOUBAO_APP_ID = "7638408005"
+    const val DOUBAO_ACCESS_TOKEN = "Jt1APcCxsGKfhdh6Cqv4kNbSTZWcHx9H"
+    const val DOUBAO_SECRET_KEY = "gO62aF3BaiQYXhDevOiCQyrNQZ24w-g3"
+    const val DOUBAO_MODEL_ID = "seed-tts-2.0"
     
     // Claude API (Anthropic)
     // 注册地址: https://console.anthropic.com/
@@ -68,12 +51,38 @@ object SDKConfig {
     // 注册地址: https://dashscope.aliyun.com/
     const val TONGYI_API_KEY = "sk-2c11207fb7a84dbb985f93cf3edf648a"
     
+    // ========== 腾讯云开发配置 ==========
+    // 控制台: https://console.cloud.tencent.com/tcb
+    // 文档: https://cloud.tencent.com/document/product/876
+    const val TCB_ENV_ID = "edusmart-dev-3gqo04ike66344ea-1327750873"  // ✅ 您的完整环境ID
+    // API 基础URL（根据您的区域选择）
+    // 上海: ap-shanghai, 北京: ap-beijing, 广州: ap-guangzhou
+    const val TCB_REGION = "ap-shanghai"  // 上海地域
+    val TCB_API_BASE_URL: String
+        get() = "https://$TCB_ENV_ID.$TCB_REGION.app.tcloudbase.com"
+    
+    // ========== 阿里云函数计算配置 ==========
+    // 控制台: https://fcnext.console.aliyun.com/
+    // 文档: https://help.aliyun.com/product/50980.html
+    // ✅ 请替换为您的函数 HTTP 触发器地址（不需要加 /auth 后缀）
+    const val ALIYUN_FC_BASE_URL = "https://auth-dskbajmzlo.cn-hangzhou.fcapp.run"
+    
+    // ========== LeanCloud 配置（推荐：最简单的后端方案）==========
+    // 控制台: https://console.leancloud.cn/
+    // 文档: https://leancloud.cn/docs/sdk_setup-android.html
+    // 注册后获取 AppID 和 AppKey
+    // ✅ 请替换为您的 LeanCloud AppID 和 AppKey
+    const val LEANCLOUD_APP_ID = "your-leancloud-app-id"
+    const val LEANCLOUD_APP_KEY = "your-leancloud-app-key"
+    const val LEANCLOUD_SERVER_URL = "https://your-server-url.leancloud.cn" // 可选，国内节点会自动选择
+    
     /**
      * 检查配置是否完整
      */
     fun isConfigured(): Boolean {
-        return XUNFEI_APP_ID != "your-xunfei-app-id" ||
-               (BAIDU_API_KEY != "your-baidu-api-key" && BAIDU_SECRET_KEY != "your-baidu-secret-key")
+        return (XUNFEI_APP_ID != "your-xunfei-app-id" && XUNFEI_APP_ID.isNotEmpty()) ||
+                (TONGYI_API_KEY != "your-tongyi-api-key" && TONGYI_API_KEY.isNotEmpty())
+
     }
 }
 

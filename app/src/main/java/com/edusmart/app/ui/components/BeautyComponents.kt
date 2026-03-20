@@ -11,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
@@ -190,18 +191,18 @@ fun BeautySceneChip(
 ) {
     val backgroundColor by animateColorAsState(
         targetValue = if (selected) 
-            MaterialTheme.colorScheme.primary 
+            Color(0xFF35568a) // 清爽蓝色
         else 
-            MaterialTheme.colorScheme.surface,
+            Color(0xFFe0e8f2), // 清新淡蓝色背景
         animationSpec = tween(300),
         label = "chip_background"
     )
     
     val contentColor by animateColorAsState(
         targetValue = if (selected) 
-            MaterialTheme.colorScheme.onPrimary 
+            Color.White // 白色文字
         else 
-            MaterialTheme.colorScheme.onSurface,
+            Color(0xFF35568a), // 深灰色文字
         animationSpec = tween(300),
         label = "chip_content"
     )
@@ -218,7 +219,7 @@ fun BeautySceneChip(
         modifier = modifier
             .height(40.dp)
             .shadow(
-                elevation = if (selected) 4.dp else 2.dp,
+                elevation = if (selected) 2.dp else 0.dp,
                 shape = RoundedCornerShape(20.dp)
             ),
         shape = RoundedCornerShape(20.dp),
@@ -232,9 +233,9 @@ fun BeautySceneChip(
             borderColor = if (selected) 
                 MaterialTheme.colorScheme.primary 
             else 
-                MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                Color.Transparent, // 未选中时无边框
             selectedBorderColor = MaterialTheme.colorScheme.primary,
-            borderWidth = if (selected) 2.dp else 1.dp
+            borderWidth = if (selected) 2.dp else 0.dp
         )
     )
 }
@@ -326,7 +327,7 @@ fun BeautyLoadingCard(
             ),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+            containerColor = Color(0xFFe0e8f2) // 清新淡蓝色背景
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
@@ -339,14 +340,14 @@ fun BeautyLoadingCard(
         ) {
             CircularProgressIndicator(
                 modifier = Modifier.size(24.dp),
-                color = MaterialTheme.colorScheme.primary,
+                color = Color(0xFF35568a), // 清爽蓝色
                 strokeWidth = 2.5.dp
             )
             Spacer(modifier = Modifier.width(16.dp))
             Text(
                 text = message,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
+                color = Color.Black
             )
         }
     }

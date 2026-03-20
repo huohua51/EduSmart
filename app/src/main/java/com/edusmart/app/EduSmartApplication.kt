@@ -4,6 +4,8 @@ import android.app.Application
 import com.edusmart.app.config.SDKConfig
 import com.edusmart.app.data.database.EduDatabase
 import com.edusmart.app.service.SpeechServiceSparkChain
+import com.google.android.datatransport.BuildConfig
+import timber.log.Timber
 
 class EduSmartApplication : Application() {
     
@@ -13,6 +15,16 @@ class EduSmartApplication : Application() {
         super.onCreate()
         android.util.Log.d("EduSmartApplication", "========== Application onCreate 开始 ==========")
         instance = this
+        
+        // 初始化Timber日志库
+        if (BuildConfig.DEBUG) {
+            Timber.plant(Timber.DebugTree())
+            Timber.d("Timber日志库初始化完成 - DEBUG模式")
+        } else {
+            // 生产环境可以添加Crashlytics等日志树
+            Timber.plant(Timber.DebugTree()) // 暂时都使用DebugTree
+            Timber.d("Timber日志库初始化完成 - RELEASE模式")
+        }
         
         // 初始化SparkChain SDK（讯飞新版语音听写SDK）
         // 三元组已完整配置: AppID、APIKey、APISecret

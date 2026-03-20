@@ -14,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -29,11 +30,12 @@ import java.nio.charset.StandardCharsets
 @Composable
 fun ScanScreen(
     navController: NavController,
-    onScanningStateChange: (Boolean) -> Unit = {}
+    onScanningStateChange: (Boolean) -> Unit = {},
+    autoStartScanning: Boolean = false
 ) {
     val context = LocalContext.current
 
-    var isScanning by remember { mutableStateOf(false) }
+    var isScanning by remember { mutableStateOf(autoStartScanning) }
     var isCroppingImage by remember { mutableStateOf(false) }
     var capturedImagePath by remember { mutableStateOf<String?>(null) }
 
@@ -69,17 +71,11 @@ fun ScanScreen(
         }
     }
 
+    // 极简白底设计
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.background,
-                        MaterialTheme.colorScheme.surface.copy(alpha = 0.3f)
-                    )
-                )
-            )
+            .background(Color.White)
     ) {
         // 如果正在裁剪图片（拍照或相册），显示裁剪界面
         if (isCroppingImage && capturedImagePath != null) {
@@ -98,6 +94,10 @@ fun ScanScreen(
                     // 删除临时文件
                     capturedImagePath?.let { File(it).delete() }
                     capturedImagePath = null
+                    if (autoStartScanning) {
+                        onScanningStateChange(false)
+                        navController.popBackStack()
+                    }
                 }
             )
         }
@@ -111,7 +111,12 @@ fun ScanScreen(
                     isCroppingImage = true
                 },
                 onCancel = {
-                    isScanning = false
+                    if (autoStartScanning) {
+                        onScanningStateChange(false)
+                        navController.popBackStack()
+                    } else {
+                        isScanning = false
+                    }
                 },
                 onPickFromGallery = {
                     imagePickerLauncher.launch("image/*")

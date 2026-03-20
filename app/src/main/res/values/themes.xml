@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.EduSmart" parent="android:Theme.Material.Light.NoActionBar">
+    <style name="Theme.EduSmart" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="android:statusBarColor">@android:color/white</item>
         <item name="android:windowLightStatusBar">true</item>
+    </style>
+    
+    <!-- 为AR Activity添加AppCompat主题 -->
+    <style name="Theme.EduSmart.AR" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowTranslucentStatus">true</item>
     </style>
 </resources>

@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -23,9 +24,15 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import coil.compose.AsyncImage
+import androidx.compose.ui.res.painterResource
+import androidx.compose.foundation.Image
+import com.edusmart.app.R
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -36,8 +43,10 @@ import com.edusmart.app.repository.NoteRepository
 import com.edusmart.app.service.AIService
 import com.edusmart.app.service.NoteSummary
 import com.edusmart.app.service.OCRService
+import com.edusmart.app.service.QwenAIService
 import com.edusmart.app.service.SpeechService
 import com.edusmart.app.ui.components.CameraPreview
+import com.edusmart.app.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -46,10 +55,28 @@ import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
-fun NoteScreen() {
+fun NoteScreen(navController: androidx.navigation.NavController? = null) {
     val context = LocalContext.current
     val application = context.applicationContext as EduSmartApplication
     val scope = rememberCoroutineScope()
+    
+    // ✅ 获取用户信息
+    val sp = remember { context.getSharedPreferences("auth", Context.MODE_PRIVATE) }
+    val userId = remember { sp.getString("userId", "") ?: "" }
+    val token = remember { sp.getString("token", "") ?: "" }
+    
+    // 检查是否已登录
+    if (userId.isEmpty() || token.isEmpty()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("请先登录", fontSize = 18.sp, color = MaterialTheme.colorScheme.onBackground)
+        }
+        return
+    }
     
     // 录音权限
     val audioPermissionState = rememberMultiplePermissionsState(
@@ -72,6 +99,14 @@ fun NoteScreen() {
         NoteViewModel(noteRepository)
     }
     
+    // ✅ 从云端加载笔记和科目
+    LaunchedEffect(userId, token) {
+        if (userId.isNotEmpty() && token.isNotEmpty()) {
+            viewModel.loadNotesFromCloud(userId, token)
+            viewModel.loadSubjectsFromCloud(userId, token)
+        }
+    }
+    
     val notes by viewModel.notes.collectAsState()
     val subjects by viewModel.subjects.collectAsState()
     val selectedSubject by viewModel.selectedSubject.collectAsState()
@@ -87,15 +122,16 @@ fun NoteScreen() {
     var editingNote by remember { mutableStateOf<NoteEntity?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     
-    // 使用 LaunchedEffect 处理搜索，添加防抖延迟
-    LaunchedEffect(searchQuery) {
+    // 🔍 使用云端搜索笔记，添加防抖延迟
+    LaunchedEffect(searchQuery, userId, token) {
+        if (userId.isEmpty() || token.isEmpty()) return@LaunchedEffect
+        
         kotlinx.coroutines.delay(300) // 防抖：300ms延迟
         if (searchQuery.isNotEmpty()) {
-            viewModel.searchNotes(searchQuery)
+            viewModel.searchNotesFromCloud(userId, token, searchQuery)
         } else {
-            // 搜索框为空时，重新加载所有笔记
-            // loadNotes() 内部会取消之前的任务并重新开始收集 Flow，所以可以安全调用
-            viewModel.loadNotes()
+            // 搜索框为空时，重新从云端加载所有笔记
+            viewModel.loadNotesFromCloud(userId, token)
         }
     }
     
@@ -108,7 +144,7 @@ fun NoteScreen() {
     var ocrResult by remember { mutableStateOf<String?>(null) }
     var transcriptResult by remember { mutableStateOf<String?>(null) }
     var currentAudioPath by remember { mutableStateOf<String?>(null) }
-    
+
     // AI功能状态
     var aiPolishedContent by remember { mutableStateOf<String?>(null) }
     var aiSummary by remember { mutableStateOf<NoteSummary?>(null) }
@@ -120,6 +156,17 @@ fun NoteScreen() {
     var aiProcessingNoteId by remember { mutableStateOf<String?>(null) }
     // 保存当前正在处理的笔记对象，用于应用AI结果
     var currentAINote by remember { mutableStateOf<NoteEntity?>(null) }
+    // AI对话界面状态
+    var showingAIChatDialog by remember { mutableStateOf(false) }
+    val qwenAIService = remember { 
+        try {
+            QwenAIService()
+        } catch (e: Exception) {
+            android.util.Log.e("NoteScreen", "初始化QwenAIService失败", e)
+            // 如果初始化失败，创建一个默认实例（虽然可能无法使用，但不会导致崩溃）
+            QwenAIService()
+        }
+    }
     
     // 录音完成广播接收器
     val recordingReceiver = remember {
@@ -142,7 +189,7 @@ fun NoteScreen() {
                                 try {
                                     isTranscribing = true
                                     android.util.Log.d("NoteScreen", "调用转写服务...")
-                                    val transcript = viewModel.transcribeAudio(audioPath)
+                                    val transcript = viewModel.transcribeAudioNow(audioPath)
                                     android.util.Log.d("NoteScreen", "转写完成，结果长度: ${transcript.length}")
                                     transcriptResult = transcript
                                 } catch (e: Exception) {
@@ -210,16 +257,17 @@ fun NoteScreen() {
     // 导出助手
     val exportHelper = remember { NoteExportHelper(context) }
     
-    // 应用润色内容的辅助函数
+    // 应用润色内容的辅助函数（使用云端更新）
     suspend fun applyPolishedContent(note: NoteEntity) {
         try {
             android.util.Log.d("NoteScreen", "开始应用润色内容，原内容长度: ${note.content.length}, 新内容长度: ${aiPolishedContent!!.length}")
             val updatedNote = note.copy(content = aiPolishedContent!!, updatedAt = System.currentTimeMillis())
-            android.util.Log.d("NoteScreen", "调用viewModel.updateNote...")
-            viewModel.updateNote(updatedNote)
-            android.util.Log.d("NoteScreen", "updateNote完成，从数据库重新加载...")
-            // 从数据库重新加载笔记，确保获取最新数据
-            val reloadedNote = noteRepository.getNoteById(note.id)
+            android.util.Log.d("NoteScreen", "调用viewModel.updateNoteInCloud...")
+            // 使用云端更新方法
+            viewModel.updateNoteInCloud(userId, token, updatedNote)
+            android.util.Log.d("NoteScreen", "updateNoteInCloud完成，从云端重新加载...")
+            // 从云端重新加载笔记，确保获取最新数据
+            val reloadedNote = noteRepository.getNoteByIdFromCloud(userId, token, note.id)
             android.util.Log.d("NoteScreen", "重新加载完成，reloadedNote: ${reloadedNote != null}")
             // 更新editingNote和currentAINote以刷新UI - 必须在主线程更新
             withContext(Dispatchers.Main) {
@@ -257,9 +305,11 @@ fun NoteScreen() {
         }
     }
     
-    // 应用总结内容的辅助函数
+    // 应用总结内容的辅助函数（使用云端更新）
+    // 注意：总结结果会覆盖原笔记内容
     suspend fun applySummaryContent(note: NoteEntity) {
         try {
+            // 将总结内容覆盖原笔记内容
             val summaryText = buildString {
                 append("【摘要】\n")
                 append(aiSummary!!.summary)
@@ -278,11 +328,12 @@ fun NoteScreen() {
             }
             android.util.Log.d("NoteScreen", "开始应用总结内容，原内容长度: ${note.content.length}, 新内容长度: ${summaryText.length}")
             val updatedNote = note.copy(content = summaryText, updatedAt = System.currentTimeMillis())
-            android.util.Log.d("NoteScreen", "调用viewModel.updateNote...")
-            viewModel.updateNote(updatedNote)
-            android.util.Log.d("NoteScreen", "updateNote完成，从数据库重新加载...")
-            // 从数据库重新加载笔记，确保获取最新数据
-            val reloadedNote = noteRepository.getNoteById(note.id)
+            android.util.Log.d("NoteScreen", "调用viewModel.updateNoteInCloud...")
+            // 使用云端更新方法
+            viewModel.updateNoteInCloud(userId, token, updatedNote)
+            android.util.Log.d("NoteScreen", "updateNoteInCloud完成，从云端重新加载...")
+            // 从云端重新加载笔记，确保获取最新数据
+            val reloadedNote = noteRepository.getNoteByIdFromCloud(userId, token, note.id)
             android.util.Log.d("NoteScreen", "重新加载完成，reloadedNote: ${reloadedNote != null}")
             // 更新editingNote和currentAINote以刷新UI - 必须在主线程更新
             withContext(Dispatchers.Main) {
@@ -320,24 +371,11 @@ fun NoteScreen() {
         }
     }
     
-    // 渐变背景颜色（黄色/橙色到浅蓝色）
-    val gradientColors = listOf(
-        Color(0xFFFFE5B4), // 浅黄色
-        Color(0xFFFFD89B), // 橙色
-        Color(0xFFB8E6FF), // 浅蓝色
-        Color(0xFFA8D8FF)  // 蓝色
-    )
-    
+    // 极简白底设计
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                brush = Brush.linearGradient(
-                    colors = gradientColors,
-                    start = androidx.compose.ui.geometry.Offset(0f, 0f),
-                    end = androidx.compose.ui.geometry.Offset(1000f, 1000f)
-                )
-            )
+            .background(Color.White)
     ) {
     Column(
         modifier = Modifier
@@ -357,24 +395,24 @@ fun NoteScreen() {
                         text = "AI笔记",
                         fontSize = 32.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFF2D5016) // 深绿色
+                        color = Color.Black
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "更懂你的创作伙伴",
                         fontSize = 16.sp,
-                        color = Color(0xFF2D5016).copy(alpha = 0.8f)
+                        color = Color.Black.copy(alpha = 0.8f)
                     )
                 }
                 IconButton(
                     onClick = { isShowingEdit = true; editingNote = null },
                     modifier = Modifier
                         .background(
-                            color = Color.White.copy(alpha = 0.9f),
+                            color = PrimaryBlue, // 清爽蓝色背景
                             shape = RoundedCornerShape(12.dp)
                         )
                 ) {
-                    Icon(Icons.Default.Add, "新建笔记", tint = Color(0xFF2D5016))
+                    Icon(Icons.Default.Add, "新建笔记", tint = Color.White)
                 }
             }
             
@@ -384,21 +422,21 @@ fun NoteScreen() {
             Text(
                 text = "AI全流程辅助创作\n激发创作灵感，精准润色表达，让囤积的知识变为生产力",
                 fontSize = 14.sp,
-                color = Color(0xFF555555),
+                color = Color.Black.copy(alpha = 0.7f),
                 lineHeight = 20.sp,
                 modifier = Modifier.padding(bottom = 16.dp)
             )
             
-            // 白色内容区域
+            // 主体卡片 - 弥散淡蓝色毛玻璃效果
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = Color.White
+                    containerColor = CardBackground // 清新淡蓝色背景
                 ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
             ) {
                 Column(
                     modifier = Modifier
@@ -410,28 +448,28 @@ fun NoteScreen() {
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
                         modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("搜索笔记...", color = Color.Gray) },
+                        placeholder = { Text("搜索笔记...", color = Color.Black.copy(alpha = 0.5f)) },
                         leadingIcon = { 
                             Icon(
                                 Icons.Default.Search, 
                                 null,
-                                tint = Color(0xFF2D5016)
+                                tint = Color.Black
                             ) 
                         },
                         trailingIcon = if (searchQuery.isNotEmpty()) {
                             {
                                 IconButton(onClick = { searchQuery = "" }) {
-                                    Icon(Icons.Default.Close, "清除", tint = Color.Gray)
+                                    Icon(Icons.Default.Close, "清除", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                                 }
                             }
                         } else null,
                         singleLine = true,
                         shape = RoundedCornerShape(16.dp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(0xFF2D5016),
-                            unfocusedBorderColor = Color.Gray.copy(alpha = 0.3f),
-                            focusedTextColor = Color.Black, // 输入文字颜色：黑色
-                            unfocusedTextColor = Color.Black // 未聚焦时文字颜色：黑色
+                            focusedBorderColor = Color.Black,
+                            unfocusedBorderColor = Color.Black.copy(alpha = 0.3f),
+                            focusedTextColor = Color.Black,
+                            unfocusedTextColor = Color.Black
                         )
                     )
             
@@ -449,8 +487,8 @@ fun NoteScreen() {
                                     onClick = { },
                                     label = { Text("全部", fontSize = 12.sp) },
                                     colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = Color(0xFF2D5016),
-                                        selectedLabelColor = Color.White
+                                        selectedContainerColor = MaterialTheme.colorScheme.onSurface,
+                                        selectedLabelColor = MaterialTheme.colorScheme.surface
                                     )
                                 )
                             } else {
@@ -472,8 +510,8 @@ fun NoteScreen() {
                                     },
                                     label = { Text(subject, fontSize = 12.sp) },
                                     colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = Color(0xFF2D5016),
-                                        selectedLabelColor = Color.White
+                                        selectedContainerColor = MaterialTheme.colorScheme.onSurface,
+                                        selectedLabelColor = MaterialTheme.colorScheme.surface
                                     )
                                 )
                             }
@@ -486,26 +524,28 @@ fun NoteScreen() {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Button(
+            OutlinedButton(
                             onClick = { isShowingCamera = true },
                             modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF2D5016)
-                            )
+                            shape = RoundedCornerShape(24.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = Color.White,
+                                contentColor = Color.Black
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color.Black)
                         ) {
-                            Icon(Icons.Default.CameraAlt, null, modifier = Modifier.size(20.dp))
+                            Icon(Icons.Default.CameraAlt, null, modifier = Modifier.size(20.dp), tint = Color.Black)
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("拍摄黑板", fontSize = 14.sp)
+                            Text("拍黑板", fontSize = 14.sp, color = Color.Black)
             }
             
-            Button(
+            OutlinedButton(
                 onClick = { 
                     if (!isRecording) {
                             // 检查权限
                             if (!audioPermissionState.allPermissionsGranted) {
                                 audioPermissionState.launchMultiplePermissionRequest()
-                                return@Button
+                                return@OutlinedButton
                             }
                             
                             // 检查是否有 RECORD_AUDIO 权限
@@ -515,7 +555,7 @@ fun NoteScreen() {
                                 ) != PackageManager.PERMISSION_GRANTED
                             ) {
                                 audioPermissionState.launchMultiplePermissionRequest()
-                                return@Button
+                                return@OutlinedButton
                             }
                             
                         val intent = Intent(context, AudioRecordService::class.java).apply {
@@ -552,25 +592,46 @@ fun NoteScreen() {
                     }
                 },
                 modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(
+                            shape = RoundedCornerShape(24.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
                     containerColor = if (isRecording) 
-                                    Color(0xFFE53935)
+                                    AccentCoral // 录音中显示红色
                                 else 
-                                    Color(0xFF2D5016)
-                            )
+                                    Color.White, // 白底
+                    contentColor = Color.Black
+                ),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color.Black)
                         ) {
                             Icon(
                                 if (isRecording) Icons.Default.Stop else Icons.Default.Mic,
                                 null,
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(20.dp),
+                                tint = Color.Black
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 if (isRecording) "停止录音" else "开始录音",
-                                fontSize = 14.sp
+                                fontSize = 14.sp,
+                                color = Color.Black
                             )
                         }
+
+            OutlinedButton(
+                onClick = {
+                    navController?.navigate("scan?autoStart=true")
+                },
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(24.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = Color.White,
+                    contentColor = Color.Black
+                ),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color.Black)
+            ) {
+                Icon(Icons.Default.Search, null, modifier = Modifier.size(20.dp), tint = Color.Black)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("拍习题", fontSize = 14.sp, color = Color.Black)
+            }
                     }
                     
                     Spacer(modifier = Modifier.height(12.dp))
@@ -581,7 +642,7 @@ fun NoteScreen() {
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFFFFEBEE)
+                                containerColor = Color.White
                             )
             ) {
                 Row(
@@ -591,10 +652,10 @@ fun NoteScreen() {
                 ) {
                     CircularProgressIndicator(
                                     modifier = Modifier.size(24.dp),
-                                    color = Color(0xFFE53935)
+                                    color = Color.Black
                     )
                     Spacer(modifier = Modifier.width(12.dp))
-                                Text("正在录音中...", color = Color(0xFFE53935))
+                                Text("正在录音中...", color = Color.Black)
                 }
             }
                         Spacer(modifier = Modifier.height(8.dp))
@@ -605,7 +666,7 @@ fun NoteScreen() {
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFFE3F2FD)
+                                containerColor = Color.White
                             )
             ) {
                 Row(
@@ -615,10 +676,10 @@ fun NoteScreen() {
                 ) {
                     CircularProgressIndicator(
                                     modifier = Modifier.size(24.dp),
-                                    color = Color(0xFF2D5016)
+                                    color = Color.Black
                     )
                     Spacer(modifier = Modifier.width(12.dp))
-                                Text("正在转写中...", color = Color(0xFF2D5016))
+                                Text("正在转写中...", color = Color.Black)
                 }
             }
                         Spacer(modifier = Modifier.height(8.dp))
@@ -629,7 +690,7 @@ fun NoteScreen() {
                 modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFFE3F2FD)
+                                containerColor = Color.White
                             )
                         ) {
                             Row(
@@ -639,10 +700,10 @@ fun NoteScreen() {
                             ) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(24.dp),
-                                    color = Color(0xFF2D5016)
+                                    color = Color.Black
                                 )
                                 Spacer(modifier = Modifier.width(12.dp))
-                                Text("正在识别中...", color = Color(0xFF2D5016))
+                                Text("正在识别中...", color = Color.Black)
                             }
                         }
                         Spacer(modifier = Modifier.height(8.dp))
@@ -654,7 +715,7 @@ fun NoteScreen() {
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(16.dp),
                             colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFFF5F5F5)
+                                containerColor = Color.White
                 )
             ) {
                 Column(
@@ -668,17 +729,18 @@ fun NoteScreen() {
                         Text(
                                         text = "OCR识别结果",
                                         style = MaterialTheme.typography.titleMedium,
-                                        color = Color(0xFF2D5016)
+                                        color = Color.Black
                         )
                                     Row {
                         TextButton(
                             onClick = { 
                                                 scope.launch {
                                                     try {
-                                                        viewModel.createNote(
+                                                        viewModel.createNoteInCloud(
+                                                            userId = userId,
+                                                            token = token,
                                                             title = "黑板笔记 ${SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date())}",
                                                             subject = subjects.firstOrNull() ?: "其他",
-                                                            content = result,
                                                             imagePaths = listOfNotNull(capturedImagePath)
                                                         )
                                                         // 保存成功后清除临时数据
@@ -696,10 +758,10 @@ fun NoteScreen() {
                                                 }
                                             }
                                         ) {
-                                            Text("保存", color = Color(0xFF2D5016))
+                                            Text("保存", color = Color.Black)
                                         }
                                         TextButton(onClick = { ocrResult = null }) {
-                                            Text("关闭", color = Color.Gray)
+                                            Text("关闭", color = Color.Black.copy(alpha = 0.6f))
                                         }
                         }
                     }
@@ -707,6 +769,7 @@ fun NoteScreen() {
                     Text(
                         text = result,
                         style = MaterialTheme.typography.bodyMedium,
+                        color = Color.Black,
                         modifier = Modifier
                             .fillMaxWidth()
                             .verticalScroll(rememberScrollState())
@@ -722,7 +785,7 @@ fun NoteScreen() {
                 modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFFF5F5F5)
+                                containerColor = Color.White
                 )
             ) {
                 Column(
@@ -736,20 +799,21 @@ fun NoteScreen() {
                     Text(
                                         text = if (transcriptResult != null) "语音转写结果" else "录音文件",
                         style = MaterialTheme.typography.titleMedium,
-                                        color = Color(0xFF2D5016)
+                                        color = Color.Black
                                     )
                                     Row {
                                         TextButton(
                                             onClick = {
                                                 scope.launch {
                                                     try {
-                                                        val content = transcriptResult ?: "【录音文件】\n\n录音已保存，但转写失败。\n\n录音文件路径：$currentAudioPath"
-                                                        viewModel.createNote(
+                                                        // ☁️ 使用云端创建录音笔记
+                                                        viewModel.createNoteInCloud(
+                                                            userId = userId,
+                                                            token = token,
                                                             title = "语音笔记 ${SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date())}",
                                                             subject = subjects.firstOrNull() ?: "其他",
-                                                            content = content,
-                                                            audioPath = currentAudioPath,
-                                                            transcript = transcriptResult
+                                                            imagePaths = emptyList(),
+                                                            audioPath = currentAudioPath
                                                         )
                                                         // 保存成功后清除临时数据
                                                         transcriptResult = null
@@ -767,13 +831,13 @@ fun NoteScreen() {
                                                 }
                                             }
                                         ) {
-                                            Text("保存", color = Color(0xFF2D5016))
+                                            Text("保存", color = Color.Black)
                                         }
                                         TextButton(onClick = { 
                                             transcriptResult = null
                                             currentAudioPath = null
                                         }) {
-                                            Text("关闭", color = Color.Gray)
+                                            Text("关闭", color = Color.Black.copy(alpha = 0.6f))
                                         }
                                     }
                                 }
@@ -782,6 +846,7 @@ fun NoteScreen() {
                                     Text(
                                         text = transcriptResult!!,
                                         style = MaterialTheme.typography.bodyMedium,
+                                        color = Color.Black,
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .verticalScroll(rememberScrollState())
@@ -791,19 +856,19 @@ fun NoteScreen() {
                                         Text(
                                             text = "录音文件已保存，但转写失败。",
                                             style = MaterialTheme.typography.bodyMedium,
-                                            color = Color(0xFFE53935)
+                                            color = Color.Black
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text(
                                             text = "文件路径：\n$currentAudioPath",
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = Color.Gray
+                                            color = Color.Black.copy(alpha = 0.7f)
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text(
                                             text = "您可以点击「保存」按钮保存录音文件，或手动输入笔记内容。",
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = Color.Gray
+                                            color = Color.Black.copy(alpha = 0.7f)
                                         )
                                     }
                                 }
@@ -818,7 +883,7 @@ fun NoteScreen() {
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(16.dp),
                             colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFFFFEBEE)
+                                containerColor = Color.White // 白底
                             )
                         ) {
                             Row(
@@ -831,11 +896,11 @@ fun NoteScreen() {
                     Text(
                         text = error,
                         style = MaterialTheme.typography.bodyMedium,
-                                    color = Color(0xFFE53935),
+                                    color = Color.Red, // 红色错误文字
                                     modifier = Modifier.weight(1f)
                                 )
                                 IconButton(onClick = { viewModel.clearError() }) {
-                                    Icon(Icons.Default.Close, "关闭", tint = Color(0xFFE53935))
+                                    Icon(Icons.Default.Close, "关闭", tint = Color.Red)
                                 }
                             }
                         }
@@ -850,7 +915,7 @@ fun NoteScreen() {
                                 .weight(1f),
                             contentAlignment = Alignment.Center
                         ) {
-                            CircularProgressIndicator(color = Color(0xFF2D5016))
+                            CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurface)
                         }
                     } else if (notes.isEmpty()) {
                         Box(
@@ -864,22 +929,16 @@ fun NoteScreen() {
                                 verticalArrangement = Arrangement.spacedBy(16.dp),
                                 modifier = Modifier.padding(32.dp)
                             ) {
-                                Icon(
-                                    Icons.Default.EditNote,
-                                    null,
-                                    modifier = Modifier.size(64.dp),
-                                    tint = Color.Gray.copy(alpha = 0.5f)
-                                )
                                 Text(
                                     text = if (isSearching) "未找到相关笔记" else "暂无笔记，开始创建吧！",
                                     style = MaterialTheme.typography.bodyLarge,
-                                    color = Color.Gray
+                                    color = Color.Black
                                 )
                                 if (!isSearching) {
                                     Text(
-                                        text = "💡 提示：创建笔记后，点击笔记右上角的「⋮」菜单，即可使用AI功能（润色、总结、生成标题等）",
+                                        text = "提示：创建笔记后，点击笔记右上角的「⋮」菜单，即可使用AI功能（润色、总结、生成标题等）",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = Color.Gray.copy(alpha = 0.7f),
+                                        color = Color.Black.copy(alpha = 0.7f),
                                         modifier = Modifier.padding(horizontal = 16.dp)
                                     )
                                 }
@@ -988,7 +1047,7 @@ fun NoteScreen() {
                                             try {
                                                 aiProcessingNoteId = note.id
                                                 currentAINote = note // 保存当前笔记对象
-                                                val polished = viewModel.polishNote(note.id)
+                                                val polished = viewModel.polishNote(userId, token, note.id)
                                                 if (polished != null) {
                                                     aiPolishedContent = polished
                                                     showingAIDialog = true
@@ -1006,7 +1065,7 @@ fun NoteScreen() {
                                             try {
                                                 aiProcessingNoteId = note.id
                                                 currentAINote = note // 保存当前笔记对象
-                                                val summary = viewModel.summarizeNote(note.id)
+                                                val summary = viewModel.summarizeNote(userId, token, note.id)
                                                 if (summary != null) {
                                                     aiSummary = summary
                                                     showingAIDialog = true
@@ -1024,7 +1083,7 @@ fun NoteScreen() {
                                             try {
                                                 aiProcessingNoteId = note.id
                                                 currentAINote = note // 保存当前笔记对象
-                                                val title = viewModel.generateTitle(note.id)
+                                                val title = viewModel.generateTitle(userId, token, note.id)
                                                 if (title != null) {
                                                     aiGeneratedTitle = title
                                                     showingAIDialog = true
@@ -1042,7 +1101,7 @@ fun NoteScreen() {
                                             try {
                                                 aiProcessingNoteId = note.id
                                                 currentAINote = note // 保存当前笔记对象
-                                                val points = viewModel.enhanceKnowledgePoints(note.id)
+                                                val points = viewModel.enhanceKnowledgePoints(userId, token, note.id)
                                                 if (points != null) {
                                                     aiEnhancedPoints = points
                                                     showingAIDialog = true
@@ -1059,7 +1118,7 @@ fun NoteScreen() {
                                         scope.launch {
                                             aiProcessingNoteId = note.id
                                             currentAINote = note // 保存当前笔记对象
-                                            val answer = viewModel.answerQuestion(note.id, question)
+                                            val answer = viewModel.answerQuestion(userId, token, note.id, question)
                                             if (answer != null) {
                                                 aiAnswer = answer
                                                 showingAIDialog = true
@@ -1074,6 +1133,23 @@ fun NoteScreen() {
                     }
                 }
             }
+        }
+        
+        // AI悬浮球
+        FloatingActionButton(
+            onClick = { showingAIChatDialog = true },
+            modifier = Modifier
+                .align(androidx.compose.ui.Alignment.BottomEnd)
+                .padding(16.dp),
+            containerColor = MaterialTheme.colorScheme.onSurface,
+            contentColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(28.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.AutoAwesome,
+                contentDescription = "AI助手",
+                modifier = Modifier.size(28.dp)
+            )
         }
     }
     
@@ -1102,7 +1178,7 @@ fun NoteScreen() {
             }
         )
     }
-    
+
     // 编辑界面
     if (isShowingEdit) {
         // 使用key确保editingNote变化时NoteEditScreen会重新组合
@@ -1115,22 +1191,49 @@ fun NoteScreen() {
             NoteEditScreen(
                 note = editingNote,
                 subjects = subjects,
-            onSave = { title, subject, content ->
+                onGenerateSubject = { content, title ->
+                    viewModel.generateSubject(content, title)
+                },
+            onSave = { title, subject, content, imagePaths ->
                 scope.launch {
                     try {
-                        if (editingNote != null) {
-                            viewModel.updateNote(editingNote!!.copy(
+                        android.util.Log.d("NoteScreen", "========== 开始保存笔记 ==========")
+                        android.util.Log.d("NoteScreen", "标题: $title")
+                        android.util.Log.d("NoteScreen", "科目: $subject")
+                        android.util.Log.d("NoteScreen", "内容长度: ${content.length}")
+                        android.util.Log.d("NoteScreen", "图片数量: ${imagePaths.size}")
+                        android.util.Log.d("NoteScreen", "userId: $userId")
+                        android.util.Log.d("NoteScreen", "token: ${token.take(10)}...")
+                        android.util.Log.d("NoteScreen", "editingNote: ${editingNote?.id}")
+                        
+                        val currentEditingNote = editingNote
+                        if (currentEditingNote != null) {
+                            // ☁️ 使用云端更新笔记
+                            android.util.Log.d("NoteScreen", "更新笔记: ${currentEditingNote.id}")
+                            viewModel.updateNoteInCloud(userId, token, currentEditingNote.copy(
                                 title = title,
                                 subject = subject,
-                                content = content
+                                content = content,
+                                images = imagePaths
                             ))
+                            android.util.Log.d("NoteScreen", "✅ 笔记更新成功")
                             android.widget.Toast.makeText(
                                 context,
                                 "笔记已更新",
                                 android.widget.Toast.LENGTH_SHORT
                             ).show()
                         } else {
-                            viewModel.createNote(title, subject, content)
+                            // ☁️ 使用云端创建笔记
+                            android.util.Log.d("NoteScreen", "创建新笔记")
+                            viewModel.createNoteInCloud(
+                                userId = userId,
+                                token = token,
+                                title = title,
+                                subject = subject,
+                                imagePaths = imagePaths,
+                                audioPath = null
+                            )
+                            android.util.Log.d("NoteScreen", "✅ 笔记创建成功")
                             android.widget.Toast.makeText(
                                 context,
                                 "笔记已保存",
@@ -1139,8 +1242,18 @@ fun NoteScreen() {
                         }
                         isShowingEdit = false
                         editingNote = null
+                        android.util.Log.d("NoteScreen", "========== 保存完成 ==========")
                     } catch (e: Exception) {
+                        android.util.Log.e("NoteScreen", "❌ 保存笔记失败", e)
+                        android.util.Log.e("NoteScreen", "错误类型: ${e.javaClass.simpleName}")
+                        android.util.Log.e("NoteScreen", "错误消息: ${e.message}")
+                        e.printStackTrace()
                         viewModel.setError("保存失败: ${e.message}")
+                        android.widget.Toast.makeText(
+                            context,
+                            "保存失败: ${e.message}",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
                     }
                 }
             },
@@ -1175,7 +1288,7 @@ fun NoteScreen() {
                         else -> "AI处理结果"
                     },
                     style = MaterialTheme.typography.titleLarge,
-                    color = Color(0xFF2D5016)
+                                        color = MaterialTheme.colorScheme.onSurface
                 )
             },
             text = {
@@ -1199,7 +1312,7 @@ fun NoteScreen() {
                             text = "摘要：",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF2D5016)
+                                        color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
                             text = summary.summary,
@@ -1210,7 +1323,7 @@ fun NoteScreen() {
                             text = "关键要点：",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF2D5016)
+                                        color = MaterialTheme.colorScheme.onSurface
                         )
                         summary.keyPoints.forEach { point ->
                             Text(
@@ -1225,7 +1338,7 @@ fun NoteScreen() {
                                 text = "标签：",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFF2D5016)
+                                        color = MaterialTheme.colorScheme.onSurface
                             )
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -1236,8 +1349,8 @@ fun NoteScreen() {
                                         onClick = { },
                                         label = { Text(tag, fontSize = 11.sp) },
                                         colors = AssistChipDefaults.assistChipColors(
-                                            containerColor = Color(0xFFE8F5E9),
-                                            labelColor = Color(0xFF2D5016)
+                                            containerColor = MaterialTheme.colorScheme.surface,
+                                            labelColor = MaterialTheme.colorScheme.onSurface
                                         )
                                     )
                                 }
@@ -1251,7 +1364,7 @@ fun NoteScreen() {
                             text = title,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF2D5016)
+                                        color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                     
@@ -1261,7 +1374,7 @@ fun NoteScreen() {
                             text = "知识点：",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF2D5016)
+                                        color = MaterialTheme.colorScheme.onSurface
                         )
                         points.forEach { point ->
                             Text(
@@ -1349,7 +1462,7 @@ fun NoteScreen() {
                                 }
                             }
                         ) {
-                            Text("应用", color = Color(0xFF2D5016))
+                            Text("应用", color = MaterialTheme.colorScheme.onSurface)
                         }
                     }
                     aiSummary != null -> {
@@ -1418,7 +1531,7 @@ fun NoteScreen() {
                                 }
                             }
                         ) {
-                            Text("应用", color = Color(0xFF2D5016))
+                            Text("应用", color = MaterialTheme.colorScheme.onSurface)
                         }
                     }
                     aiGeneratedTitle != null -> {
@@ -1440,8 +1553,10 @@ fun NoteScreen() {
                                 scope.launch {
                                     try {
                                         val updatedNote = note.copy(title = aiGeneratedTitle!!, updatedAt = System.currentTimeMillis())
-                                        viewModel.updateNote(updatedNote)
-                                        val reloadedNote = noteRepository.getNoteById(note.id)
+                                        // 使用云端更新方法
+                                        viewModel.updateNoteInCloud(userId, token, updatedNote)
+                                        // 从云端重新加载笔记
+                                        val reloadedNote = noteRepository.getNoteByIdFromCloud(userId, token, note.id)
                                         withContext(Dispatchers.Main) {
                                             val finalNote = reloadedNote ?: updatedNote
                                             // 如果正在编辑这个笔记，更新editingNote
@@ -1473,13 +1588,13 @@ fun NoteScreen() {
                                 }
                             }
                         ) {
-                            Text("应用", color = Color(0xFF2D5016))
+                            Text("应用", color = MaterialTheme.colorScheme.onSurface)
                         }
                     }
                     aiEnhancedPoints != null -> {
                         TextButton(
                             onClick = {
-                                // 应用增强的知识点
+                                // 应用增强的知识点（使用云端更新）
                                 val note = currentAINote
                                 if (note == null) {
                                     android.widget.Toast.makeText(
@@ -1495,8 +1610,10 @@ fun NoteScreen() {
                                 scope.launch {
                                     try {
                                         val updatedNote = note.copy(knowledgePoints = aiEnhancedPoints!!, updatedAt = System.currentTimeMillis())
-                                        viewModel.updateNote(updatedNote)
-                                        val reloadedNote = noteRepository.getNoteById(note.id)
+                                        // 使用云端更新方法
+                                        viewModel.updateNoteInCloud(userId, token, updatedNote)
+                                        // 从云端重新加载笔记
+                                        val reloadedNote = noteRepository.getNoteByIdFromCloud(userId, token, note.id)
                                         withContext(Dispatchers.Main) {
                                             val finalNote = reloadedNote ?: updatedNote
                                             // 如果正在编辑这个笔记，更新editingNote
@@ -1528,7 +1645,7 @@ fun NoteScreen() {
                                 }
                             }
                         ) {
-                            Text("应用", color = Color(0xFF2D5016))
+                            Text("应用", color = MaterialTheme.colorScheme.onSurface)
                         }
                     }
                     else -> {
@@ -1542,7 +1659,7 @@ fun NoteScreen() {
                                 aiAnswer = null
                             }
                         ) {
-                            Text("关闭", color = Color(0xFF2D5016))
+                            Text("关闭", color = MaterialTheme.colorScheme.onSurface)
                         }
                     }
                 }
@@ -1558,9 +1675,17 @@ fun NoteScreen() {
                         aiAnswer = null
                     }
                 ) {
-                    Text("取消", color = Color.Gray)
+                    Text("取消", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                 }
             }
+        )
+    }
+    
+    // AI对话界面
+    if (showingAIChatDialog) {
+        AIChatDialog(
+            onDismiss = { showingAIChatDialog = false },
+            qwenAIService = qwenAIService
         )
     }
 }
@@ -1617,7 +1742,7 @@ fun NoteItem(
                     if (isProcessing) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(24.dp),
-                            color = Color(0xFF2D5016),
+                                        color = MaterialTheme.colorScheme.onSurface,
                             strokeWidth = 2.dp
                         )
                     } else {
@@ -1627,85 +1752,86 @@ fun NoteItem(
                     }
                     DropdownMenu(
                         expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
+                        onDismissRequest = { showMenu = false },
+                        modifier = Modifier.background(PageBackground)
                     ) {
                         DropdownMenuItem(
-                            text = { Text("编辑") },
+                            text = { Text("编辑", color = TextPrimary) },
                             onClick = {
                                 showMenu = false
                                 onEdit()
                             },
-                            leadingIcon = { Icon(Icons.Default.Edit, null) }
+                            leadingIcon = { Icon(Icons.Default.Edit, null, tint = PrimaryBlue) }
                         )
-                        Divider()
+                        Divider(color = SecondaryBlue.copy(alpha = 0.2f))
                         DropdownMenuItem(
-                            text = { Text("AI润色") },
+                            text = { Text("AI润色", color = TextPrimary) },
                             onClick = {
                                 showMenu = false
                                 onPolish()
                             },
-                            leadingIcon = { Icon(Icons.Default.EditNote, null) },
+                            leadingIcon = { Icon(Icons.Default.EditNote, null, tint = PrimaryBlue) },
                             enabled = !isProcessing
                         )
                         DropdownMenuItem(
-                            text = { Text("AI总结") },
+                            text = { Text("AI总结", color = TextPrimary) },
                             onClick = {
                                 showMenu = false
                                 onSummarize()
                             },
-                            leadingIcon = { Icon(Icons.Default.Description, null) },
+                            leadingIcon = { Icon(Icons.Default.Description, null, tint = PrimaryBlue) },
                             enabled = !isProcessing
                         )
                         DropdownMenuItem(
-                            text = { Text("生成标题") },
+                            text = { Text("生成标题", color = TextPrimary) },
                             onClick = {
                                 showMenu = false
                                 onGenerateTitle()
                             },
-                            leadingIcon = { Icon(Icons.Default.TextFields, null) },
+                            leadingIcon = { Icon(Icons.Default.TextFields, null, tint = PrimaryBlue) },
                             enabled = !isProcessing
                         )
                         DropdownMenuItem(
-                            text = { Text("增强知识点") },
+                            text = { Text("增强知识点", color = TextPrimary) },
                             onClick = {
                                 showMenu = false
                                 onEnhancePoints()
                             },
-                            leadingIcon = { Icon(Icons.Default.Star, null) },
+                            leadingIcon = { Icon(Icons.Default.Star, null, tint = PrimaryBlue) },
                             enabled = !isProcessing
                         )
-                        Divider()
+                        Divider(color = SecondaryBlue.copy(alpha = 0.2f))
                         DropdownMenuItem(
-                            text = { Text("分享") },
+                            text = { Text("分享", color = TextPrimary) },
                             onClick = {
                                 showMenu = false
                                 onShare()
                             },
-                            leadingIcon = { Icon(Icons.Default.Share, null) }
+                            leadingIcon = { Icon(Icons.Default.Share, null, tint = PrimaryBlue) }
                         )
                         DropdownMenuItem(
-                            text = { Text("导出PDF") },
+                            text = { Text("导出PDF", color = TextPrimary) },
                             onClick = {
                                 showMenu = false
                                 onExportPdf()
                             },
-                            leadingIcon = { Icon(Icons.Default.PictureAsPdf, null) }
+                            leadingIcon = { Icon(Icons.Default.PictureAsPdf, null, tint = PrimaryBlue) }
                         )
                         DropdownMenuItem(
-                            text = { Text("导出图片") },
+                            text = { Text("导出图片", color = TextPrimary) },
                             onClick = {
                                 showMenu = false
                                 onExportImage()
                             },
-                            leadingIcon = { Icon(Icons.Default.Image, null) }
+                            leadingIcon = { Icon(Icons.Default.Image, null, tint = PrimaryBlue) }
                         )
                         DropdownMenuItem(
-                            text = { Text("删除") },
+                            text = { Text("删除", color = AccentCoral) },
                             onClick = {
                                 showMenu = false
                                 onDelete()
                             },
-                            leadingIcon = { Icon(Icons.Default.Delete, null) }
+                            leadingIcon = { Icon(Icons.Default.Delete, null, tint = AccentCoral) }
                         )
                     }
                 }
@@ -1722,24 +1848,50 @@ fun NoteItem(
             if (!note.knowledgePoints.isNullOrEmpty()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     note.knowledgePoints.take(3).forEach { point ->
-                        AssistChip(
-                            onClick = { },
-                            label = { 
+                        // 限制知识点长度，最多显示8个字符
+                        val displayText = if (point.length > 8) point.take(8) + "..." else point
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = CardBackground,
+                            modifier = Modifier.height(28.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
                                 Text(
-                                    point, 
+                                    text = displayText,
                                     style = MaterialTheme.typography.labelSmall,
-                                    fontSize = 11.sp
-                                ) 
-                            },
-                            colors = AssistChipDefaults.assistChipColors(
-                                containerColor = Color(0xFFE8F5E9),
-                                labelColor = Color(0xFF2D5016)
-                            )
-                        )
+                                    fontSize = 11.sp,
+                                    color = PrimaryBlue,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+                    // 如果知识点超过3个，显示更多标识
+                    if (note.knowledgePoints.size > 3) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = CardBackground,
+                            modifier = Modifier.height(28.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "+${note.knowledgePoints.size - 3}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontSize = 11.sp,
+                                    color = PrimaryBlue
+                                )
+                            }
+                        }
                     }
                 }
             }

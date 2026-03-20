@@ -22,6 +22,7 @@ import com.edusmart.app.data.entity.WrongQuestionEntity
 import com.edusmart.app.service.OCRService
 import com.edusmart.app.service.QwenAIService
 import com.edusmart.app.service.QuestionAnalysisResult
+import com.edusmart.app.service.WrongQuestionCloudService
 import com.edusmart.app.ui.components.BeautyLoadingCard
 import kotlinx.coroutines.launch
 import org.json.JSONArray
@@ -38,6 +39,12 @@ fun ScanResultDetailScreen(
     val ocrService = remember { OCRService() }
     val qwenService = remember { QwenAIService() }
     val database = remember { EduDatabase.getDatabase(context) }
+    val cloudService = remember { WrongQuestionCloudService() }
+    
+    // ✅ 从 SharedPreferences 获取用户认证信息
+    val sp = remember { context.getSharedPreferences("auth", android.content.Context.MODE_PRIVATE) }
+    val userId = remember { sp.getString("userId", "") ?: "" }
+    val token = remember { sp.getString("token", "") ?: "" }
 
     var isLoading by remember { mutableStateOf(true) }
     var questionText by remember { mutableStateOf("") }
@@ -69,7 +76,10 @@ fun ScanResultDetailScreen(
             TopAppBar(
                 title = { Text("题目解析") },
                 navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
+                    IconButton(onClick = {
+                        // 返回到上一页，如果是从智能笔记进入的，会返回到智能笔记
+                        navController.popBackStack()
+                    }) {
                         Icon(Icons.Default.ArrowBack, "返回")
                     }
                 },
@@ -293,7 +303,43 @@ fun ScanResultDetailScreen(
                                     nextReviewTime = System.currentTimeMillis() + 24 * 60 * 60 * 1000,
                                     createdAt = System.currentTimeMillis()
                                 )
-                                database.wrongQuestionDao().insertWrongQuestion(wrongQuestion)
+                                
+                                // ☁️ 直接上传到云端（不保存本地）
+                                try {
+                                    if (userId.isNotEmpty() && token.isNotEmpty()) {
+                                        cloudService.syncWrongQuestion(userId, token, wrongQuestion)
+                                            .onSuccess { cloudId ->
+                                                android.util.Log.d("ScanDetail", "✅ 错题已同步到云端: $cloudId")
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    "已添加到错题本",
+                                                    android.widget.Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                            .onFailure { error ->
+                                                android.util.Log.e("ScanDetail", "❌ 云端同步失败: ${error.message}")
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    "添加失败: ${error.message}",
+                                                    android.widget.Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                    } else {
+                                        android.util.Log.w("ScanDetail", "⚠️ userId或token为空")
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "请先登录",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                } catch (e: Exception) {
+                                    android.util.Log.e("ScanDetail", "❌ 云端同步异常: ${e.message}")
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        "添加失败: ${e.message}",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                }
                             }
                             showAddToWrongBookDialog = false
                         }

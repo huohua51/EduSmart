@@ -10,6 +10,7 @@ import com.edusmart.app.service.AIService
 import com.edusmart.app.service.OCRService
 import com.edusmart.app.service.ExamPaperAnalysisService
 import com.edusmart.app.service.WrongQuestionInfo
+import com.edusmart.app.service.WrongQuestionCloudService
 import kotlinx.coroutines.flow.Flow
 import org.json.JSONArray
 import java.util.UUID
@@ -20,7 +21,8 @@ class RadarRepository(
     private val wrongQuestionDao: WrongQuestionDao,
     private val ocrService: OCRService,
     private val aiService: AIService,
-    private val examPaperAnalysisService: ExamPaperAnalysisService
+    private val examPaperAnalysisService: ExamPaperAnalysisService,
+    private val cloudService: WrongQuestionCloudService = WrongQuestionCloudService()
 ) {
     
     fun getKnowledgePointsBySubject(subject: String): Flow<List<KnowledgePointEntity>> {
@@ -28,9 +30,22 @@ class RadarRepository(
     }
 
     /**
-     * 批量添加错题到错题本
+     * 批量添加错题到错题本（直接上传云端，无本地副本）
      */
-    suspend fun batchAddWrongQuestions(wrongQuestions: List<WrongQuestionInfo>, imagePath: String) {
+    suspend fun batchAddWrongQuestions(
+        userId: String,
+        token: String,
+        wrongQuestions: List<WrongQuestionInfo>,
+        imagePath: String
+    ) {
+        // ☁️ 验证用户认证
+        if (userId.isEmpty() || token.isEmpty()) {
+            android.util.Log.e("RadarRepository", "❌ userId或token为空，无法上传错题")
+            throw IllegalArgumentException("userId和token不能为空")
+        }
+        
+        val entities = mutableListOf<WrongQuestionEntity>()
+        
         wrongQuestions.forEach { wrongQuestion ->
             val entity = WrongQuestionEntity(
                 id = UUID.randomUUID().toString(),
@@ -43,7 +58,23 @@ class RadarRepository(
                 userAnswer = wrongQuestion.studentAnswer,
                 wrongReason = "试卷中的错题"
             )
-            wrongQuestionDao.insertWrongQuestion(entity)
+            entities.add(entity)
+        }
+        
+        // ☁️ 直接批量上传到云端
+        try {
+            android.util.Log.d("RadarRepository", "🌐 开始批量上传 ${entities.size} 道试卷错题到云端...")
+            cloudService.syncWrongQuestionsBatch(userId, token, entities)
+                .onSuccess { cloudIds ->
+                    android.util.Log.d("RadarRepository", "✅ 试卷错题已批量同步到云端: ${cloudIds.size} 条")
+                }
+                .onFailure { error ->
+                    android.util.Log.e("RadarRepository", "❌ 云端批量同步失败: ${error.message}")
+                    throw error
+                }
+        } catch (e: Exception) {
+            android.util.Log.e("RadarRepository", "❌ 云端批量同步异常: ${e.message}")
+            throw e
         }
     }
 

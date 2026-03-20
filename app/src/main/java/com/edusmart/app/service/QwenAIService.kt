@@ -64,6 +64,76 @@ class QwenAIService {
     }
 
     /**
+     * 多轮对话聊天方法
+     * @param messages 对话历史，格式为 [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
+     * @return AI响应内容
+     */
+    suspend fun chatWithHistory(messages: List<Map<String, String>>): String = withContext(Dispatchers.IO) {
+        try {
+            val responseBody = callTongyiAPIWithHistory(messages)
+            parseTongyiResponse(responseBody)
+        } catch (e: Exception) {
+            throw Exception("AI调用失败: ${e.message}", e)
+        }
+    }
+
+    /**
+     * 使用对话历史调用通义千问API
+     */
+    private suspend fun callTongyiAPIWithHistory(messages: List<Map<String, String>>): String = withContext(Dispatchers.IO) {
+        val apiKey = SDKConfig.TONGYI_API_KEY
+
+        if (apiKey == "your-tongyi-api-key" || apiKey.isEmpty()) {
+            throw IllegalArgumentException("请先在 SDKConfig.kt 中配置通义千问API密钥")
+        }
+
+        val url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+
+        val json = JSONObject()
+        json.put("model", "qwen-turbo")
+        json.put("input", JSONObject().apply {
+            put("messages", JSONArray().apply {
+                messages.forEach { msg ->
+                    put(JSONObject().apply {
+                        put("role", msg["role"] ?: "user")
+                        put("content", msg["content"] ?: "")
+                    })
+                }
+            })
+        })
+        json.put("parameters", JSONObject().apply {
+            put("result_format", "message")
+        })
+
+        val requestBody = json.toString().toRequestBody("application/json".toMediaType())
+
+        val request = Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer $apiKey")
+            .header("Content-Type", "application/json")
+            .post(requestBody)
+            .build()
+
+        try {
+            val response = client.newCall(request).execute()
+
+            if (!response.isSuccessful) {
+                val errorBody = response.body?.string() ?: ""
+                throw Exception("API调用失败 (${response.code}): ${response.message}\n$errorBody")
+            }
+
+            val responseBody = response.body?.string()
+            if (responseBody.isNullOrEmpty()) {
+                throw Exception("API响应体为空")
+            }
+
+            responseBody
+        } catch (e: Exception) {
+            throw Exception("通义千问API调用异常: ${e.message}", e)
+        }
+    }
+
+    /**
      * 调用通义千问API
      */
     private suspend fun callTongyiAPI(prompt: String): String = withContext(Dispatchers.IO) {
@@ -219,10 +289,10 @@ $questionText
     private fun parseAnalysisResult(content: String, questionText: String): QuestionAnalysisResult {
         try {
             // 提取各个部分
-            val answer = extractSection(content, "【答案】", listOf("【解题步骤】", "【知识点】", "【思路分析】"))
-            val steps = extractSteps(content)
-            val knowledgePoints = extractKnowledgePoints(content)
-            val analysis = extractSection(content, "【思路分析】", emptyList())
+            val answer = cleanMarkdown(extractSection(content, "【答案】", listOf("【解题步骤】", "【知识点】", "【思路分析】")))
+            val steps = extractSteps(content).map { cleanMarkdown(it) }
+            val knowledgePoints = extractKnowledgePoints(content).map { cleanMarkdown(it) }
+            val analysis = cleanMarkdown(extractSection(content, "【思路分析】", emptyList()))
 
             // 检查是否无法解答
             val cannotAnswer = answer.contains("无法解答") || answer.contains("无法回答")
@@ -243,6 +313,20 @@ $questionText
                 questionText = questionText
             )
         }
+    }
+
+    /**
+     * 清理Markdown格式符号
+     */
+    private fun cleanMarkdown(text: String): String {
+        return text
+            .replace(Regex("\\*\\*(.+?)\\*\\*"), "$1")  // 移除加粗 **text**
+            .replace(Regex("\\*(.+?)\\*"), "$1")        // 移除斜体 *text*
+            .replace(Regex("__(.+?)__"), "$1")          // 移除加粗 __text__
+            .replace(Regex("_(.+?)_"), "$1")            // 移除斜体 _text_
+            .replace(Regex("`(.+?)`"), "$1")            // 移除代码 `code`
+            .replace(Regex("\\[(.+?)\\]\\(.+?\\)"), "$1") // 移除链接 [text](url)
+            .trim()
     }
 
     /**

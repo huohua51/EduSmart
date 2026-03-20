@@ -2,6 +2,7 @@ package com.edusmart.app.util
 
 import com.edusmart.app.data.entity.WrongQuestionEntity
 import org.json.JSONArray
+import kotlin.math.log10
 
 /**
  * 知识点掌握度分析器
@@ -27,7 +28,13 @@ class KnowledgeMasteryAnalyzer {
     }
 
     /**
-     * 计算单个学科的掌握度
+     * 计算单个学科的掌握度（改进版）
+     *
+     * 计算逻辑：
+     * 1. 基础分：根据错题数量使用对数衰减（避免线性扣分过快归零）
+     * 2. 复习加成：复习次数越多，掌握度越高（指数增长）
+     * 3. 时间衰减：错题越久未复习，掌握度越低（渐进式衰减）
+     * 4. 知识点覆盖度：错题涉及的知识点越集中，说明某个点没掌握好
      */
     private fun calculateSubjectMastery(
         subject: String,
@@ -43,20 +50,32 @@ class KnowledgeMasteryAnalyzer {
             )
         }
 
-        val baseScore = 100f
-        val wrongPenalty = wrongQuestions.size * 5f
-        val reviewBonus = wrongQuestions.sumOf { it.reviewCount } * 2f
+        // 1. 基础分：使用对数函数，避免错题多时分数过快归零
+        // 公式：100 - 30 * log10(错题数 + 1)
+        // 1道错题≈91分，5道≈79分，10道≈70分，20道≈61分，50道≈49分
+        val wrongCount = wrongQuestions.size
+        val baseScore = 100f - (30f * kotlin.math.log10(wrongCount.toFloat() + 1))
 
-        // 计算时间衰减（超过30天未复习的错题）
+        // 2. 复习加成：复习率越高，掌握度越好
+        // 公式：复习率 * 20分（最多加20分）
+        val reviewedCount = wrongQuestions.count { it.reviewCount > 0 }
+        val reviewRate = if (wrongCount > 0) reviewedCount.toFloat() / wrongCount else 0f
+        val reviewBonus = reviewRate * 20f
+
+        // 3. 时间衰减：根据错题的平均"年龄"计算衰减
+        // 7天内：无衰减，7-30天：轻微衰减，30天以上：明显衰减
         val currentTime = System.currentTimeMillis()
-        val oldQuestionsCount = wrongQuestions.count {
-            currentTime - it.createdAt > 30 * 24 * 60 * 60 * 1000L
-        }
-        val timePenalty = oldQuestionsCount * 3f
+        val avgAge = wrongQuestions.map {
+            (currentTime - it.createdAt) / (24 * 60 * 60 * 1000L) // 转换为天数
+        }.average().toFloat()
 
-        val masteryScore = (baseScore - wrongPenalty + reviewBonus - timePenalty).coerceIn(0f, 100f)
+        val timePenalty = when {
+            avgAge < 7 -> 0f           // 7天内：无衰减
+            avgAge < 30 -> (avgAge - 7) * 0.3f  // 7-30天：每天扣0.3分
+            else -> 7f + (avgAge - 30) * 0.5f   // 30天以上：基础扣7分，之后每天扣0.5分
+        }.coerceAtMost(25f) // 最多扣25分
 
-        // 统计薄弱知识点
+        // 4. 知识点集中度惩罚：如果错题都集中在少数几个知识点，说明这些点没掌握好
         val knowledgePointFrequency = mutableMapOf<String, Int>()
         wrongQuestions.forEach { question ->
             val points = parseKnowledgePoints(question.knowledgePoints)
@@ -65,6 +84,17 @@ class KnowledgeMasteryAnalyzer {
             }
         }
 
+        // 如果某个知识点错误次数超过总错题的50%，额外扣分
+        val maxFrequency = knowledgePointFrequency.values.maxOrNull() ?: 0
+        val concentrationPenalty = if (maxFrequency > wrongCount * 0.5f) {
+            (maxFrequency - wrongCount * 0.5f) * 2f  // 超过50%的部分，每题扣2分
+        } else 0f
+
+        // 最终分数
+        val masteryScore = (baseScore + reviewBonus - timePenalty - concentrationPenalty)
+            .coerceIn(0f, 100f)
+
+        // 统计薄弱知识点（取前5个）
         val weakKnowledgePoints = knowledgePointFrequency.entries
             .sortedByDescending { it.value }
             .take(5)
@@ -74,7 +104,7 @@ class KnowledgeMasteryAnalyzer {
             subject = subject,
             masteryScore = masteryScore,
             wrongCount = wrongQuestions.size,
-            reviewedCount = wrongQuestions.count { it.reviewCount > 0 },
+            reviewedCount = reviewedCount,
             weakKnowledgePoints = weakKnowledgePoints
         )
     }

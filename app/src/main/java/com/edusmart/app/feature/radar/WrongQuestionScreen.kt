@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -25,6 +26,7 @@ import com.edusmart.app.repository.WrongQuestionRepository
 import org.json.JSONArray
 import java.text.SimpleDateFormat
 import java.util.*
+import com.edusmart.app.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -33,6 +35,26 @@ fun WrongQuestionScreen(onBack: () -> Unit) {
     val database = remember { EduDatabase.getDatabase(context) }
     val repository = remember { WrongQuestionRepository(database.wrongQuestionDao()) }
     val viewModel = remember { WrongQuestionViewModel(repository) }
+
+    // ✅ 从 SharedPreferences 获取用户认证信息
+    val sp = remember { context.getSharedPreferences("auth", android.content.Context.MODE_PRIVATE) }
+    val userId = remember { sp.getString("userId", "") ?: "" }
+    val token = remember { sp.getString("token", "") ?: "" }
+    
+    // ⚠️ 如果未登录，显示提示并返回
+    if (userId.isEmpty() || token.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("请先登录")
+        }
+        return
+    }
+
+    // ☁️ 从云端加载错题
+    LaunchedEffect(userId, token) {
+        if (userId.isNotEmpty() && token.isNotEmpty()) {
+            viewModel.loadWrongQuestionsFromCloud(userId, token)
+        }
+    }
 
     val wrongQuestions by viewModel.wrongQuestions.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
@@ -43,14 +65,14 @@ fun WrongQuestionScreen(onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("错题本") },
+                title = { Text("错题本", color = TextPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, "返回")
+                        Icon(Icons.Default.ArrowBack, "返回", tint = PrimaryBlue)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = PageBackground
                 )
             )
         }
@@ -59,14 +81,7 @@ fun WrongQuestionScreen(onBack: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .background(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.background,
-                            MaterialTheme.colorScheme.surface.copy(alpha = 0.3f)
-                        )
-                    )
-                )
+                .background(PageBackground)
         ) {
             if (isLoading) {
                 CircularProgressIndicator(
@@ -84,19 +99,19 @@ fun WrongQuestionScreen(onBack: () -> Unit) {
                         imageVector = Icons.Default.CheckCircle,
                         contentDescription = null,
                         modifier = Modifier.size(64.dp),
-                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                        tint = SecondaryBlue
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
                         text = "暂无错题",
                         style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        color = TextPrimary
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = "在拍照识题中添加错题后，会显示在这里",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                        color = TextSecondary
                     )
                 }
             } else {
@@ -126,7 +141,8 @@ fun WrongQuestionScreen(onBack: () -> Unit) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        viewModel.deleteWrongQuestion(question)
+                        // ☁️ 使用云端删除
+                        viewModel.deleteWrongQuestionFromCloud(userId, token, question)
                         showDeleteDialog = null
                     }
                 ) {
@@ -147,7 +163,7 @@ fun WrongQuestionScreen(onBack: () -> Unit) {
             question = question,
             onDismiss = { selectedQuestion = null },
             onMarkReviewed = {
-                viewModel.markAsReviewed(question)
+                viewModel.markAsReviewed(userId, token, question)
                 selectedQuestion = null
             }
         )
@@ -165,11 +181,11 @@ fun WrongQuestionCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(4.dp, RoundedCornerShape(16.dp))
+            .shadow(2.dp, RoundedCornerShape(16.dp))
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
+            containerColor = CardBackground
         )
     ) {
         Column(
@@ -185,6 +201,7 @@ fun WrongQuestionCard(
                 Text(
                     text = question.questionText,
                     style = MaterialTheme.typography.bodyLarge,
+                    color = TextPrimary,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
@@ -196,7 +213,7 @@ fun WrongQuestionCard(
                     Icon(
                         imageVector = Icons.Default.Delete,
                         contentDescription = "删除",
-                        tint = MaterialTheme.colorScheme.error
+                        tint = AccentCoral
                     )
                 }
             }
@@ -210,12 +227,12 @@ fun WrongQuestionCard(
                 Text(
                     text = "复习次数: ${question.reviewCount}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    color = SecondaryBlue
                 )
                 Text(
                     text = dateFormat.format(Date(question.createdAt)),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    color = TextSecondary
                 )
             }
         }
@@ -257,7 +274,7 @@ fun WrongQuestionDetailDialog(
                 .heightIn(max = 600.dp),
             shape = RoundedCornerShape(20.dp),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
+                containerColor = Color.White
             )
         ) {
             Column(
@@ -286,9 +303,9 @@ fun WrongQuestionDetailDialog(
                 // 题目
                 Column {
                     Text(
-                        text = "📝 题目",
+                        text = "题目",
                         style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.primary
+                        color = PrimaryBlue
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
@@ -300,9 +317,9 @@ fun WrongQuestionDetailDialog(
                 // 答案
                 Column {
                     Text(
-                        text = "✅ 答案",
+                        text = "答案",
                         style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.primary
+                        color = Color.Black
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
@@ -315,9 +332,9 @@ fun WrongQuestionDetailDialog(
                 if (question.steps.isNotEmpty()) {
                     Column {
                         Text(
-                            text = "📋 解题步骤",
+                            text = "解题步骤",
                             style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary
+                            color = PrimaryBlue
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         stepsList.forEachIndexed { index, step ->
@@ -334,9 +351,9 @@ fun WrongQuestionDetailDialog(
                 if (question.knowledgePoints.isNotEmpty()) {
                     Column {
                         Text(
-                            text = "💡 涉及知识点",
+                            text = "涉及知识点",
                             style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary
+                            color = Color.Black
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         knowledgePointsList.forEach { point ->
@@ -353,9 +370,9 @@ fun WrongQuestionDetailDialog(
                 if (question.analysis.isNotEmpty()) {
                     Column {
                         Text(
-                            text = "🧠 思路分析",
+                            text = "思路分析",
                             style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary
+                            color = PrimaryBlue
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(

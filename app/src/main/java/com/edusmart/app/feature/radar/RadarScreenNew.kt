@@ -1,6 +1,7 @@
 package com.edusmart.app.feature.radar
 
 import android.net.Uri
+import com.edusmart.app.ui.theme.*
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -18,10 +20,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.edusmart.app.data.database.EduDatabase
+import com.edusmart.app.data.entity.WrongQuestionEntity
 import com.edusmart.app.repository.RadarRepository
+import com.edusmart.app.repository.WrongQuestionRepository
 import com.edusmart.app.service.*
 import com.edusmart.app.ui.components.BeautyLoadingCard
 import com.edusmart.app.ui.components.RadarChart
@@ -35,6 +41,11 @@ fun RadarScreenNew() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val database = remember { EduDatabase.getDatabase(context) }
+
+    // ✅ 从 SharedPreferences 获取用户认证信息
+    val sp = remember { context.getSharedPreferences("auth", android.content.Context.MODE_PRIVATE) }
+    val userId = remember { sp.getString("userId", "") ?: "" }
+    val token = remember { sp.getString("token", "") ?: "" }
 
     // 初始化服务和仓库
     val ocrService = remember { OCRService() }
@@ -53,6 +64,9 @@ fun RadarScreenNew() {
             examPaperService
         )
     }
+    val wrongQuestionRepository = remember {
+        WrongQuestionRepository(database.wrongQuestionDao())
+    }
 
     // 状态管理
     var showWrongQuestionScreen by remember { mutableStateOf(false) }
@@ -64,7 +78,30 @@ fun RadarScreenNew() {
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
 
     // 错题数据和掌握度分析
-    val wrongQuestions by repository.getAllWrongQuestions().collectAsState(initial = emptyList())
+    // 修改后（从云端获取）
+    var wrongQuestions by remember { mutableStateOf<List<WrongQuestionEntity>>(emptyList()) }
+    var isLoadingWrongQuestions by remember { mutableStateOf(false) }
+    var refreshTrigger by remember { mutableStateOf(0) } // 刷新触发器
+
+    // 加载错题的函数
+    suspend fun loadWrongQuestions() {
+        if (userId.isNotEmpty() && token.isNotEmpty()) {
+            isLoadingWrongQuestions = true
+            try {
+                wrongQuestions = wrongQuestionRepository.getAllWrongQuestionsFromCloud(userId, token)
+                android.util.Log.d("RadarScreen", "✅ 从云端加载错题成功: ${wrongQuestions.size} 条")
+            } catch (e: Exception) {
+                android.util.Log.e("RadarScreen", "❌ 从云端加载错题失败: ${e.message}")
+            } finally {
+                isLoadingWrongQuestions = false
+            }
+        }
+    }
+
+    // 首次加载和刷新时触发
+    LaunchedEffect(userId, token, refreshTrigger) {
+        loadWrongQuestions()
+    }
     val masteryAnalyzer = remember { KnowledgeMasteryAnalyzer() }
     val subjectMastery = remember(wrongQuestions) {
         masteryAnalyzer.analyzeSubjectMastery(wrongQuestions)
@@ -77,21 +114,52 @@ fun RadarScreenNew() {
         uri?.let {
             selectedImageUri = it
             scope.launch {
-                isAnalyzing = true
-                val imagePath = saveImageToFile(context, it)
-                val result = examPaperService.analyzeExamPaper(imagePath)
-                analysisResult = result
-                isAnalyzing = false
+                try {
+                    isAnalyzing = true
+                    
+                    // ⚠️ 检查登录状态
+                    if (userId.isEmpty() || token.isEmpty()) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "请先登录",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                        isAnalyzing = false
+                        return@launch
+                    }
+                    
+                    val imagePath = saveImageToFile(context, it)
+                    val result = examPaperService.analyzeExamPaper(imagePath)
+                    analysisResult = result
+                    isAnalyzing = false
 
-                if (result.success && result.wrongQuestions.isNotEmpty()) {
-                    repository.batchAddWrongQuestions(result.wrongQuestions, imagePath)
+                    if (result.success && result.wrongQuestions.isNotEmpty()) {
+                        // ☁️ 直接批量上传到云端
+                        repository.batchAddWrongQuestions(userId, token, result.wrongQuestions, imagePath)
+                        // 不显示Toast提示
+
+                        // ✅ 立即刷新雷达图
+                        refreshTrigger++
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("RadarScreenNew", "❌ 上传失败: ${e.message}")
+                    android.widget.Toast.makeText(
+                        context,
+                        "上传失败: ${e.message}",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                    isAnalyzing = false
                 }
             }
         }
     }
 
     if (showWrongQuestionScreen) {
-        WrongQuestionScreen(onBack = { showWrongQuestionScreen = false })
+        WrongQuestionScreen(onBack = {
+            showWrongQuestionScreen = false
+            // ✅ 从错题本返回时刷新雷达图
+            refreshTrigger++
+        })
     } else if (showPracticeTest && practiceQuestions.isNotEmpty()) {
         PracticeTestScreen(
             questions = practiceQuestions,
@@ -99,15 +167,18 @@ fun RadarScreenNew() {
             onBack = {
                 showPracticeTest = false
                 practiceQuestions = emptyList()
+                // ✅ 从举一反三返回时刷新雷达图（可能有新的错题）
+                refreshTrigger++
             }
         )
     } else {
+        // 极简白底设计
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text("知识雷达") },
+                    title = { Text("知识雷达", color = Color.Black) },
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface
+                        containerColor = Color.White
                     )
                 )
             }
@@ -116,14 +187,7 @@ fun RadarScreenNew() {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .background(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(
-                                MaterialTheme.colorScheme.background,
-                                MaterialTheme.colorScheme.surface.copy(alpha = 0.3f)
-                            )
-                        )
-                    )
+                    .background(Color.White)
             ) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -135,31 +199,38 @@ fun RadarScreenNew() {
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .shadow(4.dp, RoundedCornerShape(16.dp)),
-                            shape = RoundedCornerShape(16.dp)
+                                .shadow(2.dp, RoundedCornerShape(16.dp)),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = CardBackground // 清新淡蓝色背景
+                            )
                         ) {
                             Column(
                                 modifier = Modifier.padding(20.dp),
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 Text(
-                                    text = "📄 试卷扫描",
-                                    style = MaterialTheme.typography.titleLarge
+                                    text = "试卷扫描",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    color = Color.Black
                                 )
 
                                 Text(
                                     text = "扫描试卷，自动识别错题并加入错题本",
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                                    color = Color.Black.copy(alpha = 0.7f)
                                 )
 
                                 Button(
                                     onClick = { imagePickerLauncher.launch("image/*") },
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = PrimaryBlue
+                                    )
                                 ) {
-                                    Icon(Icons.Default.CameraAlt, "扫描")
+                                    Icon(Icons.Default.CameraAlt, "扫描", tint = Color.White)
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("拍摄或选择试卷")
+                                    Text("从相册选择试卷", color = Color.White)
                                 }
 
                                 OutlinedButton(
@@ -168,7 +239,7 @@ fun RadarScreenNew() {
                                 ) {
                                     Icon(Icons.Default.ErrorOutline, "错题本")
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("查看错题本")
+                                    Text("查看错题本", color = Color.Black)
                                 }
                             }
                         }
@@ -192,10 +263,26 @@ fun RadarScreenNew() {
                                     result = result,
                                     onGenerateSimilar = { wrongQuestion ->
                                         scope.launch {
-                                            val questions = examPaperService.generatePracticeQuestions(wrongQuestion, 3)
-                                            practiceQuestions = questions
-                                            selectedWrongQuestionId = null
-                                            showPracticeTest = true
+                                            try {
+                                                val questions = examPaperService.generatePracticeQuestions(wrongQuestion, 3)
+                                                if (questions.isNotEmpty()) {
+                                                    practiceQuestions = questions
+                                                    selectedWrongQuestionId = null
+                                                    showPracticeTest = true
+                                                } else {
+                                                    android.widget.Toast.makeText(
+                                                        context,
+                                                        "生成练习题失败，请重试",
+                                                        android.widget.Toast.LENGTH_SHORT
+                                                    ).show()
+                                                }
+                                            } catch (e: Exception) {
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    "生成失败: ${e.message}",
+                                                    android.widget.Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
                                         }
                                     }
                                 )
@@ -209,16 +296,20 @@ fun RadarScreenNew() {
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .shadow(4.dp, RoundedCornerShape(16.dp)),
-                                shape = RoundedCornerShape(16.dp)
+                                    .shadow(2.dp, RoundedCornerShape(16.dp)),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = CardBackground // 清新淡蓝色背景
+                                )
                             ) {
                                 Column(
                                     modifier = Modifier.padding(20.dp),
                                     verticalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
                                     Text(
-                                        text = "📊 知识掌握度雷达图",
-                                        style = MaterialTheme.typography.titleLarge
+                                        text = "知识掌握度雷达图",
+                                        style = MaterialTheme.typography.titleLarge,
+                                        color = Color.Black
                                     )
 
                                     val radarData = subjectMastery.mapValues { it.value.masteryScore }
@@ -230,49 +321,30 @@ fun RadarScreenNew() {
                             }
                         }
 
-                        // 薄弱知识点列表
+                        // 薄弱知识点列表 - 新设计
                         item {
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .shadow(4.dp, RoundedCornerShape(16.dp)),
-                                shape = RoundedCornerShape(16.dp)
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Column(
-                                    modifier = Modifier.padding(20.dp),
-                                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    Text(
-                                        text = "💡 薄弱知识点",
-                                        style = MaterialTheme.typography.titleLarge
-                                    )
+                                // 标题
+                                Text(
+                                    text = "薄弱知识点",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    color = TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 4.dp)
+                                )
 
-                                    subjectMastery.forEach { (subject, mastery) ->
-                                        if (mastery.weakKnowledgePoints.isNotEmpty()) {
-                                            Text(
-                                                text = subject,
-                                                style = MaterialTheme.typography.titleMedium,
-                                                color = MaterialTheme.colorScheme.primary
+                                // 知识点卡片列表
+                                subjectMastery.forEach { (subject, mastery) ->
+                                    if (mastery.weakKnowledgePoints.isNotEmpty()) {
+                                        mastery.weakKnowledgePoints.forEach { point ->
+                                            WeakKnowledgePointCard(
+                                                subject = subject,
+                                                knowledgePoint = point.name,
+                                                errorCount = point.errorCount
                                             )
-                                            mastery.weakKnowledgePoints.forEach { point ->
-                                                Row(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .padding(start = 16.dp, top = 4.dp),
-                                                    horizontalArrangement = Arrangement.SpaceBetween
-                                                ) {
-                                                    Text(
-                                                        text = "• ${point.name}",
-                                                        style = MaterialTheme.typography.bodyMedium
-                                                    )
-                                                    Text(
-                                                        text = "错${point.errorCount}次",
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = MaterialTheme.colorScheme.error
-                                                    )
-                                                }
-                                            }
-                                            Spacer(modifier = Modifier.height(8.dp))
                                         }
                                     }
                                 }
@@ -293,10 +365,10 @@ fun AnalysisResultCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(4.dp, RoundedCornerShape(16.dp)),
+            .shadow(2.dp, RoundedCornerShape(16.dp)),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+            containerColor = CardBackground // 清新淡蓝色背景
         )
     ) {
         Column(
@@ -304,9 +376,9 @@ fun AnalysisResultCard(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                text = "✅ 分析完成",
+                text = "分析完成",
                 style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.primary
+                color = Color.Black
             )
 
             Text(
@@ -317,7 +389,7 @@ fun AnalysisResultCard(
             Text(
                 text = "识别到 ${result.wrongQuestions.size} 道错题",
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                color = Color.Black.copy(alpha = 0.7f)
             )
 
             Divider()
@@ -336,7 +408,7 @@ fun AnalysisResultCard(
                     Text(
                         text = "知识点: ${question.knowledgePoints.joinToString(", ")}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
+                        color = Color.Black
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Button(
@@ -345,7 +417,7 @@ fun AnalysisResultCard(
                             .fillMaxWidth()
                             .height(48.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.secondary
+                            containerColor = PrimaryBlue
                         ),
                         shape = RoundedCornerShape(12.dp),
                         elevation = ButtonDefaults.buttonElevation(
@@ -356,12 +428,15 @@ fun AnalysisResultCard(
                         Icon(
                             imageVector = Icons.Default.Psychology,
                             contentDescription = "举一反三",
+                            tint = Color.White,
                             modifier = Modifier.size(24.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "举一反三",
-                            style = MaterialTheme.typography.titleMedium
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
@@ -371,7 +446,7 @@ fun AnalysisResultCard(
                 Text(
                     text = "还有 ${result.wrongQuestions.size - 3} 道错题...",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                    color = Color.Black.copy(alpha = 0.5f)
                 )
             }
         }
@@ -388,3 +463,68 @@ fun saveImageToFile(context: android.content.Context, uri: Uri): String {
     return file.absolutePath
 }
 
+/**
+ * 薄弱知识点卡片组件 - 参考UI设计
+ */
+@Composable
+fun WeakKnowledgePointCard(
+    subject: String,
+    knowledgePoint: String,
+    errorCount: Int
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .shadow(2.dp, RoundedCornerShape(16.dp)),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color.White
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 左侧：图标圆圈
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(
+                        color = PrimaryBlue.copy(alpha = 0.1f),
+                        shape = CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ErrorOutline,
+                    contentDescription = null,
+                    tint = PrimaryBlue,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            // 中间：知识点信息
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = knowledgePoint,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "错误 $errorCount 次",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AccentCoral
+                )
+            }
+        }
+    }
+}

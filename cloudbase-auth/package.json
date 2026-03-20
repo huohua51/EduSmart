@@ -1,0 +1,11 @@
+{
+  "name": "cloudbase-auth",
+  "version": "1.0.0",
+  "description": "腾讯云开发用户认证云函数",
+  "main": "index.js",
+  "dependencies": {
+    "@cloudbase/node-sdk": "^2.5.0",
+    "cos-nodejs-sdk-v5": "^1.0.0"
+  }
+}
+

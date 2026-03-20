@@ -39,6 +39,94 @@ class NoteViewModel(
     
     private var notesJob: kotlinx.coroutines.Job? = null
     
+    /**
+     * 从云端加载笔记列表（新方法）
+     */
+    fun loadNotesFromCloud(userId: String, token: String) {
+        if (userId.isEmpty() || token.isEmpty()) {
+            _errorMessage.value = "用户信息缺失，请先登录"
+            return
+        }
+        
+        notesJob?.cancel()
+        notesJob = viewModelScope.launch {
+            try {
+                Log.d("NoteViewModel", "🌐 从云端加载笔记列表...")
+                _isLoading.value = true
+                val notesList = noteRepository.getAllNotesFromCloud(userId, token)
+                _notes.value = notesList
+                _errorMessage.value = null
+                Log.d("NoteViewModel", "✅ 从云端加载笔记成功: ${notesList.size} 条")
+            } catch (e: Exception) {
+                Log.e("NoteViewModel", "❌ 从云端加载笔记失败", e)
+                _errorMessage.value = "加载笔记失败: ${e.message}"
+                _notes.value = emptyList()
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+    
+    /**
+     * 按科目从云端加载笔记（新方法）
+     */
+    fun loadNotesBySubjectFromCloud(userId: String, token: String, subject: String) {
+        if (userId.isEmpty() || token.isEmpty()) {
+            _errorMessage.value = "用户信息缺失，请先登录"
+            return
+        }
+        
+        notesJob?.cancel()
+        notesJob = viewModelScope.launch {
+            try {
+                Log.d("NoteViewModel", "🌐 从云端按科目加载笔记: $subject")
+                _isLoading.value = true
+                _selectedSubject.value = subject
+                val notesList = noteRepository.getNotesBySubjectFromCloud(userId, token, subject)
+                _notes.value = notesList
+                _errorMessage.value = null
+                Log.d("NoteViewModel", "✅ 加载成功: ${notesList.size} 条")
+            } catch (e: Exception) {
+                Log.e("NoteViewModel", "❌ 加载失败", e)
+                _errorMessage.value = "加载笔记失败: ${e.message}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+    
+    /**
+     * 从云端搜索笔记（新方法）
+     */
+    fun searchNotesFromCloud(userId: String, token: String, keyword: String) {
+        if (userId.isEmpty() || token.isEmpty()) {
+            _errorMessage.value = "用户信息缺失，请先登录"
+            return
+        }
+        
+        if (keyword.isEmpty()) {
+            loadNotesFromCloud(userId, token)
+            return
+        }
+        
+        notesJob?.cancel()
+        notesJob = viewModelScope.launch {
+            try {
+                Log.d("NoteViewModel", "🌐 从云端搜索笔记: $keyword")
+                _isLoading.value = true
+                val results = noteRepository.searchNotesFromCloud(userId, token, keyword)
+                _notes.value = results
+                _errorMessage.value = null
+                Log.d("NoteViewModel", "✅ 搜索成功: ${results.size} 条")
+            } catch (e: Exception) {
+                Log.e("NoteViewModel", "❌ 搜索失败", e)
+                _errorMessage.value = "搜索失败: ${e.message}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+    
     fun loadNotes() {
         // 取消之前的任务，避免重复收集
         notesJob?.cancel()
@@ -110,6 +198,30 @@ class NoteViewModel(
         }
     }
     
+    /**
+     * 从云端加载科目列表（新方法）
+     */
+    fun loadSubjectsFromCloud(userId: String, token: String) {
+        if (userId.isEmpty() || token.isEmpty()) {
+            return
+        }
+        
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                Log.d("NoteViewModel", "🌐 从云端加载科目列表...")
+                val subjectsList = noteRepository.getAllSubjectsFromCloud(userId, token)
+                _subjects.value = subjectsList
+                Log.d("NoteViewModel", "✅ 科目列表加载成功: ${subjectsList.size} 个科目")
+            } catch (e: Exception) {
+                Log.e("NoteViewModel", "❌ 加载科目列表失败", e)
+                // 如果加载失败，至少保留一个默认科目
+                if (_subjects.value.isEmpty()) {
+                    _subjects.value = listOf("其他")
+                }
+            }
+        }
+    }
+    
     fun searchNotes(keyword: String) {
         viewModelScope.launch {
             try {
@@ -133,12 +245,42 @@ class NoteViewModel(
         }
     }
     
-    suspend fun transcribeAudio(audioPath: String): String {
+    suspend fun transcribeAudioNow(audioPath: String): String {
         return try {
             noteRepository.transcribeAudio(audioPath)
         } catch (e: Exception) {
             _errorMessage.value = "语音转写失败: ${e.message}"
             throw e
+        }
+    }
+    
+    /**
+     * 创建笔记到云端（新方法）
+     */
+    suspend fun createNoteInCloud(
+        userId: String,
+        token: String,
+        title: String,
+        subject: String,
+        imagePaths: List<String>? = null,
+        audioPath: String? = null
+    ): NoteEntity {
+        return try {
+            Log.d("NoteViewModel", "✍️ 创建笔记到云端: title=$title")
+            _isLoading.value = true
+            val note = noteRepository.mergeNote(
+                userId, token, title, subject, imagePaths, audioPath
+            )
+            // 重新加载列表
+            loadNotesFromCloud(userId, token)
+            Log.d("NoteViewModel", "✅ 笔记创建成功: ${note.id}")
+            note
+        } catch (e: Exception) {
+            Log.e("NoteViewModel", "❌ 创建失败", e)
+            _errorMessage.value = "创建笔记失败: ${e.message}"
+            throw e
+        } finally {
+            _isLoading.value = false
         }
     }
     
@@ -152,20 +294,8 @@ class NoteViewModel(
     ): NoteEntity {
         return try {
             Log.d("NoteViewModel", "开始创建笔记: title=$title, subject=$subject")
-            val note = noteRepository.createNote(
-                title = title,
-                subject = subject,
-                content = content,
-                imagePaths = imagePaths,
-                audioPath = audioPath,
-                transcript = transcript
-            )
-            Log.d("NoteViewModel", "笔记创建成功，ID: ${note.id}")
-            // 注意：不需要调用 loadNotes()，因为 Room Flow 会自动检测数据库变化并更新
-            // Flow 会在数据库更新后自动发出新值，UI 会自动刷新
-            // 但是需要重新加载科目列表，因为可能有新科目
-            loadSubjects()
-            note
+            // 使用本地方法创建笔记（旧方法，已废弃）
+            throw UnsupportedOperationException("请使用 createNoteInCloud 方法")
         } catch (e: Exception) {
             Log.e("NoteViewModel", "创建笔记失败", e)
             _errorMessage.value = "创建笔记失败: ${e.message}"
@@ -180,23 +310,65 @@ class NoteViewModel(
         audioPath: String?
     ): NoteEntity {
         return try {
-            val note = noteRepository.mergeNote(title, subject, imagePaths, audioPath)
-            // Room Flow 会自动更新，不需要手动调用 loadNotes()
-            // 但是需要重新加载科目列表，因为可能有新科目
-            loadSubjects()
-            note
+            // 使用本地方法合并笔记（旧方法，已废弃）
+            throw UnsupportedOperationException("请使用 createNoteInCloud 方法")
         } catch (e: Exception) {
             _errorMessage.value = "合并笔记失败: ${e.message}"
             throw e
         }
     }
     
+    /**
+     * 更新笔记到云端（新方法）
+     */
+    suspend fun updateNoteInCloud(userId: String, token: String, note: NoteEntity) {
+        try {
+            Log.d("NoteViewModel", "🔄 更新笔记到云端: ${note.id}")
+            Log.d("NoteViewModel", "标题: ${note.title}")
+            Log.d("NoteViewModel", "科目: ${note.subject}")
+            Log.d("NoteViewModel", "内容长度: ${note.content.length}")
+            Log.d("NoteViewModel", "userId: $userId")
+            Log.d("NoteViewModel", "token: ${token.take(10)}...")
+            _isLoading.value = true
+            noteRepository.updateNote(userId, token, note)
+            // 重新加载列表
+            loadNotesFromCloud(userId, token)
+            Log.d("NoteViewModel", "✅ 笔记已更新")
+        } catch (e: Exception) {
+            Log.e("NoteViewModel", "❌ 更新失败", e)
+            Log.e("NoteViewModel", "错误类型: ${e.javaClass.simpleName}")
+            Log.e("NoteViewModel", "错误消息: ${e.message}")
+            e.printStackTrace()
+            _errorMessage.value = "更新笔记失败: ${e.message}"
+            throw e
+        } finally {
+            _isLoading.value = false
+        }
+    }
+    
+    /**
+     * 删除笔记从云端（新方法）
+     */
+    suspend fun deleteNoteInCloud(userId: String, token: String, note: NoteEntity) {
+        try {
+            Log.d("NoteViewModel", "🗑️ 从云端删除笔记: ${note.id}")
+            _isLoading.value = true
+            noteRepository.deleteNote(userId, token, note)
+            // 重新加载列表
+            loadNotesFromCloud(userId, token)
+            Log.d("NoteViewModel", "✅ 笔记已删除")
+        } catch (e: Exception) {
+            Log.e("NoteViewModel", "❌ 删除失败", e)
+            _errorMessage.value = "删除笔记失败: ${e.message}"
+            throw e
+        } finally {
+            _isLoading.value = false
+        }
+    }
+    
     suspend fun updateNote(note: NoteEntity) {
         try {
-            noteRepository.updateNote(note)
-            // Room Flow 会自动更新，不需要手动调用 loadNotes()
-            // 但是需要重新加载科目列表，因为科目可能被修改
-            loadSubjects()
+            throw UnsupportedOperationException("请使用 updateNoteInCloud 方法")
         } catch (e: Exception) {
             _errorMessage.value = "更新笔记失败: ${e.message}"
             throw e
@@ -205,8 +377,7 @@ class NoteViewModel(
     
     suspend fun deleteNote(note: NoteEntity) {
         try {
-            noteRepository.deleteNote(note)
-            // Room Flow 会自动更新，不需要手动调用 loadNotes()
+            throw UnsupportedOperationException("请使用 deleteNoteInCloud 方法")
         } catch (e: Exception) {
             _errorMessage.value = "删除笔记失败: ${e.message}"
             throw e
@@ -224,14 +395,17 @@ class NoteViewModel(
     // ========== AI功能 ==========
     
     /**
-     * AI润色笔记
+     * AI润色笔记（从云端获取）
      */
-    suspend fun polishNote(noteId: String): String? {
+    suspend fun polishNote(userId: String, token: String, noteId: String): String? {
         return try {
+            Log.d("NoteViewModel", "✨ 开始AI润色: $noteId")
             _isLoading.value = true
-            val polished = noteRepository.polishNote(noteId)
+            val polished = noteRepository.polishNote(userId, token, noteId)
+            Log.d("NoteViewModel", "✅ AI润色完成")
             polished
         } catch (e: Exception) {
+            Log.e("NoteViewModel", "❌ AI润色失败", e)
             _errorMessage.value = "润色失败: ${e.message}"
             null
         } finally {
@@ -240,14 +414,17 @@ class NoteViewModel(
     }
     
     /**
-     * AI总结笔记
+     * AI总结笔记（从云端获取）
      */
-    suspend fun summarizeNote(noteId: String): NoteSummary? {
+    suspend fun summarizeNote(userId: String, token: String, noteId: String): NoteSummary? {
         return try {
+            Log.d("NoteViewModel", "📝 开始AI总结: $noteId")
             _isLoading.value = true
-            val summary = noteRepository.summarizeNote(noteId)
+            val summary = noteRepository.summarizeNote(userId, token, noteId)
+            Log.d("NoteViewModel", "✅ AI总结完成")
             summary
         } catch (e: Exception) {
+            Log.e("NoteViewModel", "❌ AI总结失败", e)
             _errorMessage.value = "总结失败: ${e.message}"
             null
         } finally {
@@ -256,14 +433,17 @@ class NoteViewModel(
     }
     
     /**
-     * AI生成标题
+     * AI生成标题（从云端获取）
      */
-    suspend fun generateTitle(noteId: String): String? {
+    suspend fun generateTitle(userId: String, token: String, noteId: String): String? {
         return try {
+            Log.d("NoteViewModel", "📌 开始生成标题: $noteId")
             _isLoading.value = true
-            val title = noteRepository.generateTitle(noteId)
+            val title = noteRepository.generateTitle(userId, token, noteId)
+            Log.d("NoteViewModel", "✅ 标题生成完成")
             title
         } catch (e: Exception) {
+            Log.e("NoteViewModel", "❌ 生成标题失败", e)
             _errorMessage.value = "生成标题失败: ${e.message}"
             null
         } finally {
@@ -272,14 +452,17 @@ class NoteViewModel(
     }
     
     /**
-     * AI增强知识点
+     * AI增强知识点（从云端获取）
      */
-    suspend fun enhanceKnowledgePoints(noteId: String): List<String>? {
+    suspend fun enhanceKnowledgePoints(userId: String, token: String, noteId: String): List<String>? {
         return try {
+            Log.d("NoteViewModel", "💡 开始增强知识点: $noteId")
             _isLoading.value = true
-            val points = noteRepository.enhanceKnowledgePoints(noteId)
+            val points = noteRepository.enhanceKnowledgePoints(userId, token, noteId)
+            Log.d("NoteViewModel", "✅ 知识点增强完成")
             points
         } catch (e: Exception) {
+            Log.e("NoteViewModel", "❌ 增强知识点失败", e)
             _errorMessage.value = "提取知识点失败: ${e.message}"
             null
         } finally {
@@ -288,16 +471,41 @@ class NoteViewModel(
     }
     
     /**
-     * AI问答
+     * AI问答（从云端获取）
      */
-    suspend fun answerQuestion(noteId: String, question: String): String? {
+    suspend fun answerQuestion(userId: String, token: String, noteId: String, question: String): String? {
         return try {
+            Log.d("NoteViewModel", "❓ 开始AI问答: $noteId")
             _isLoading.value = true
-            val answer = noteRepository.answerQuestion(noteId, question)
+            val answer = noteRepository.answerQuestion(userId, token, noteId, question)
+            Log.d("NoteViewModel", "✅ AI问答完成")
             answer
         } catch (e: Exception) {
+            Log.e("NoteViewModel", "❌ AI问答失败", e)
             _errorMessage.value = "回答问题失败: ${e.message}"
             null
+        } finally {
+            _isLoading.value = false
+        }
+    }
+    
+    /**
+     * AI生成科目
+     * 根据笔记内容自动生成科目
+     */
+    suspend fun generateSubject(content: String, title: String? = null): String {
+        return try {
+            _isLoading.value = true
+            val subject = noteRepository.generateSubject(content, title)
+            // 如果生成的科目不在列表中，添加到列表
+            if (subject.isNotEmpty() && !_subjects.value.contains(subject)) {
+                _subjects.value = _subjects.value + subject
+            }
+            subject
+        } catch (e: Exception) {
+            Log.e("NoteViewModel", "生成科目失败", e)
+            _errorMessage.value = "生成科目失败: ${e.message}"
+            "其他"
         } finally {
             _isLoading.value = false
         }

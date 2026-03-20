@@ -17,6 +17,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.edusmart.app.ui.theme.*
 
 /**
  * 可拖动调整的相机指导框组件
@@ -89,28 +90,29 @@ fun DraggableCameraGuide(
                                            touchX in leftPx..rightPx
 
                         // 根据拖动位置调整框的大小
+                        // 最小尺寸改为0.05（5%），允许更小的裁剪框
                         if (onLeftEdge) {
                             val newLeft = frameLeft + dragAmount.x / canvasWidth
                             // 限制最小宽度和边界
-                            if (newLeft >= 0.05f && newLeft < frameRight - 0.2f) {
+                            if (newLeft >= 0.05f && newLeft < frameRight - 0.05f) {
                                 frameLeft = newLeft
                             }
                         }
                         if (onRightEdge) {
                             val newRight = frameRight + dragAmount.x / canvasWidth
-                            if (newRight <= 0.95f && newRight > frameLeft + 0.2f) {
+                            if (newRight <= 0.95f && newRight > frameLeft + 0.05f) {
                                 frameRight = newRight
                             }
                         }
                         if (onTopEdge) {
                             val newTop = frameTop + dragAmount.y / canvasHeight
-                            if (newTop >= 0.1f && newTop < frameBottom - 0.2f) {
+                            if (newTop >= 0.05f && newTop < frameBottom - 0.05f) {
                                 frameTop = newTop
                             }
                         }
                         if (onBottomEdge) {
                             val newBottom = frameBottom + dragAmount.y / canvasHeight
-                            if (newBottom <= 0.9f && newBottom > frameTop + 0.2f) {
+                            if (newBottom <= 0.95f && newBottom > frameTop + 0.05f) {
                                 frameBottom = newBottom
                             }
                         }
@@ -128,57 +130,60 @@ fun DraggableCameraGuide(
             val frameWidth = rightPx - leftPx
             val frameHeight = bottomPx - topPx
 
-            // 绘制半透明遮罩（框外区域）
+            // 绘制半透明遮罩（框外区域）- 使用更柔和的遮罩
+            val maskColor = Color(0xFF35568a).copy(alpha = 0.3f) // PrimaryBlue 半透明
+
             // 上方遮罩
             drawRect(
-                color = Color.Black.copy(alpha = 0.5f),
+                color = maskColor,
                 topLeft = Offset(0f, 0f),
                 size = Size(canvasWidth, topPx)
             )
             // 下方遮罩
             drawRect(
-                color = Color.Black.copy(alpha = 0.5f),
+                color = maskColor,
                 topLeft = Offset(0f, bottomPx),
                 size = Size(canvasWidth, canvasHeight - bottomPx)
             )
             // 左侧遮罩
             drawRect(
-                color = Color.Black.copy(alpha = 0.5f),
+                color = maskColor,
                 topLeft = Offset(0f, topPx),
                 size = Size(leftPx, frameHeight)
             )
             // 右侧遮罩
             drawRect(
-                color = Color.Black.copy(alpha = 0.5f),
+                color = maskColor,
                 topLeft = Offset(rightPx, topPx),
                 size = Size(canvasWidth - rightPx, frameHeight)
             )
 
-            // 绘制指导框边框（实线）
-            val frameColor = Color.Green
+            // 绘制指导框边框（实线）- 使用温暖的蓝色
+            val frameColor = Color(0xFF8b9bc1) // SecondaryBlue
             val strokeWidth = 3.dp.toPx()
 
             drawRoundRect(
                 color = frameColor,
                 topLeft = Offset(leftPx, topPx),
                 size = Size(frameWidth, frameHeight),
-                cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx()),
+                cornerRadius = CornerRadius(12.dp.toPx(), 12.dp.toPx()),
                 style = Stroke(width = strokeWidth)
             )
 
-            // 绘制四个角的加粗标记
+            // 绘制四个角的加粗标记 - 使用深蓝色
+            val cornerColor = Color(0xFF35568a) // PrimaryBlue
             val cornerLength = 30.dp.toPx()
             val cornerStrokeWidth = 5.dp.toPx()
 
             // 左上角
             drawLine(
-                color = frameColor,
+                color = cornerColor,
                 start = Offset(leftPx, topPx),
                 end = Offset(leftPx + cornerLength, topPx),
                 strokeWidth = cornerStrokeWidth
             )
             drawLine(
-                color = frameColor,
+                color = cornerColor,
                 start = Offset(leftPx, topPx),
                 end = Offset(leftPx, topPx + cornerLength),
                 strokeWidth = cornerStrokeWidth
@@ -186,13 +191,13 @@ fun DraggableCameraGuide(
 
             // 右上角
             drawLine(
-                color = frameColor,
+                color = cornerColor,
                 start = Offset(rightPx, topPx),
                 end = Offset(rightPx - cornerLength, topPx),
                 strokeWidth = cornerStrokeWidth
             )
             drawLine(
-                color = frameColor,
+                color = cornerColor,
                 start = Offset(rightPx, topPx),
                 end = Offset(rightPx, topPx + cornerLength),
                 strokeWidth = cornerStrokeWidth
@@ -200,13 +205,13 @@ fun DraggableCameraGuide(
 
             // 左下角
             drawLine(
-                color = frameColor,
+                color = cornerColor,
                 start = Offset(leftPx, bottomPx),
                 end = Offset(leftPx + cornerLength, bottomPx),
                 strokeWidth = cornerStrokeWidth
             )
             drawLine(
-                color = frameColor,
+                color = cornerColor,
                 start = Offset(leftPx, bottomPx),
                 end = Offset(leftPx, bottomPx - cornerLength),
                 strokeWidth = cornerStrokeWidth
@@ -214,13 +219,13 @@ fun DraggableCameraGuide(
 
             // 右下角
             drawLine(
-                color = frameColor,
+                color = cornerColor,
                 start = Offset(rightPx, bottomPx),
                 end = Offset(rightPx - cornerLength, bottomPx),
                 strokeWidth = cornerStrokeWidth
             )
             drawLine(
-                color = frameColor,
+                color = cornerColor,
                 start = Offset(rightPx, bottomPx),
                 end = Offset(rightPx, bottomPx - cornerLength),
                 strokeWidth = cornerStrokeWidth
@@ -237,7 +242,7 @@ fun DraggableCameraGuide(
                 center = Offset(leftPx, (topPx + bottomPx) / 2)
             )
             drawCircle(
-                color = frameColor,
+                color = cornerColor,
                 radius = dotRadius,
                 center = Offset(leftPx, (topPx + bottomPx) / 2),
                 style = Stroke(width = 2.dp.toPx())
@@ -250,7 +255,7 @@ fun DraggableCameraGuide(
                 center = Offset(rightPx, (topPx + bottomPx) / 2)
             )
             drawCircle(
-                color = frameColor,
+                color = cornerColor,
                 radius = dotRadius,
                 center = Offset(rightPx, (topPx + bottomPx) / 2),
                 style = Stroke(width = 2.dp.toPx())
@@ -263,7 +268,7 @@ fun DraggableCameraGuide(
                 center = Offset((leftPx + rightPx) / 2, topPx)
             )
             drawCircle(
-                color = frameColor,
+                color = cornerColor,
                 radius = dotRadius,
                 center = Offset((leftPx + rightPx) / 2, topPx),
                 style = Stroke(width = 2.dp.toPx())
@@ -276,7 +281,7 @@ fun DraggableCameraGuide(
                 center = Offset((leftPx + rightPx) / 2, bottomPx)
             )
             drawCircle(
-                color = frameColor,
+                color = cornerColor,
                 radius = dotRadius,
                 center = Offset((leftPx + rightPx) / 2, bottomPx),
                 style = Stroke(width = 2.dp.toPx())
