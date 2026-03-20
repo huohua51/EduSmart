@@ -60,7 +60,8 @@ captures/
 .cxx/
 
 # Google Services (e.g. APIs or Firebase)
-# google-services.json
+google-services.json
+**/google-services.json
 
 # Freeline
 freeline.py
@@ -93,6 +94,8 @@ lint/tmp/
 # API Keys (不要提交密钥文件)
 **/api_keys.properties
 **/secrets.properties
+node_modules/
+**/node_modules/
 
 # Gradle cache (Windows 路径过长问题)
 .gradle/caches/
