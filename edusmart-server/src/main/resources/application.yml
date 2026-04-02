@@ -1,0 +1,27 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: edusmart-server
+  datasource:
+    url: jdbc:mysql://localhost:3306/edusmart?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8
+    username: root
+    password: ${DB_PASSWORD:root}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+
+jwt:
+  secret: ${JWT_SECRET:change-this-to-a-long-random-string-at-least-256-bits-for-hs256}
+  expiration-ms: 2592000000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
