@@ -15,9 +15,9 @@ object SDKConfig {
     // 注册地址: https://www.xfyun.cn/
     // 文档: https://www.xfyun.cn/doc/asr/android-sdk.html
     // 获取方式: 登录控制台 https://console.xfyun.cn/services/iat 查看三元组
-    const val XUNFEI_APP_ID = "bddbdddc"
-    const val XUNFEI_API_KEY = "7e5660798385addf9d13b73cde5eb6d0"
-    const val XUNFEI_API_SECRET = "ZjM4ZTE1OThmNGIyOTA5MTFmN2EwNmUz"
+    const val XUNFEI_APP_ID = "your-xunfei-app-id"
+    const val XUNFEI_API_KEY = "your-xunfei-api-key"
+    const val XUNFEI_API_SECRET = "your-xunfei-api-secret"
     
     // ========== 百度SDK配置 ==========
     // 注册地址: https://ai.baidu.com/
@@ -29,9 +29,9 @@ object SDKConfig {
 
     // ========== 豆包TTS语音合成配置 ==========
     // 官方文档: https://www.volcengine.com/docs/6561/79824
-    const val DOUBAO_APP_ID = "7638408005"
-    const val DOUBAO_ACCESS_TOKEN = "Jt1APcCxsGKfhdh6Cqv4kNbSTZWcHx9H"
-    const val DOUBAO_SECRET_KEY = "gO62aF3BaiQYXhDevOiCQyrNQZ24w-g3"
+    const val DOUBAO_APP_ID = "your-doubao-app-id"
+    const val DOUBAO_ACCESS_TOKEN = "your-doubao-access-token"
+    const val DOUBAO_SECRET_KEY = "your-doubao-secret-key"
     const val DOUBAO_MODEL_ID = "seed-tts-2.0"
     
     // Claude API (Anthropic)
@@ -49,7 +49,7 @@ object SDKConfig {
     
     // 通义千问API (阿里云)
     // 注册地址: https://dashscope.aliyun.com/
-    const val TONGYI_API_KEY = "sk-2c11207fb7a84dbb985f93cf3edf648a"
+    const val TONGYI_API_KEY = "your-tongyi-api-key"
     
     // ========== Java 后端配置（Spring Boot） ==========
     // 本地开发：Android 模拟器访问宿主机用 10.0.2.2
