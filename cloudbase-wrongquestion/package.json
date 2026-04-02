@@ -1,0 +1,9 @@
+{
+  "name": "cloudbase-wrongquestion",
+  "version": "1.0.0",
+  "description": "错题管理云函数",
+  "main": "index.js",
+  "dependencies": {
+    "@cloudbase/node-sdk": "^2.4.0"
+  }
+}

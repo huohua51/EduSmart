@@ -1,99 +1,649 @@
 package com.edusmart.app.feature.note
 
+import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.core.content.ContextCompat
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.rememberMultiplePermissionsState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import coil.compose.AsyncImage
+import androidx.compose.ui.res.painterResource
+import androidx.compose.foundation.Image
+import com.edusmart.app.R
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.edusmart.app.feature.note.AudioRecordService
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.edusmart.app.EduSmartApplication
+import com.edusmart.app.data.entity.NoteEntity
+import com.edusmart.app.repository.NoteRepository
+import com.edusmart.app.service.AIService
+import com.edusmart.app.service.NoteSummary
+import com.edusmart.app.service.OCRService
+import com.edusmart.app.service.QwenAIService
 import com.edusmart.app.service.SpeechService
+import com.edusmart.app.ui.components.CameraPreview
+import com.edusmart.app.ui.theme.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import java.io.File
+import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.*
 
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
-fun NoteScreen() {
+fun NoteScreen(navController: androidx.navigation.NavController? = null) {
     val context = LocalContext.current
+    val application = context.applicationContext as EduSmartApplication
     val scope = rememberCoroutineScope()
-    val speechService = remember { SpeechService(context) }
     
+    // ✅ 获取用户信息
+    val sp = remember { context.getSharedPreferences("auth", Context.MODE_PRIVATE) }
+    val userId = remember { sp.getString("userId", "") ?: "" }
+    val token = remember { sp.getString("token", "") ?: "" }
+    
+    // 检查是否已登录
+    if (userId.isEmpty() || token.isEmpty()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("请先登录", fontSize = 18.sp, color = MaterialTheme.colorScheme.onBackground)
+        }
+        return
+    }
+    
+    // 录音权限
+    val audioPermissionState = rememberMultiplePermissionsState(
+        permissions = listOf(
+            Manifest.permission.RECORD_AUDIO
+        )
+    )
+    
+    // 延迟初始化服务，避免阻塞主线程
+    val noteRepository = remember {
+        NoteRepository(
+            noteDao = application.database.noteDao(),
+            ocrService = OCRService(),
+            speechService = SpeechService(context),
+            aiService = AIService()
+        )
+    }
+    // 使用 lazy 延迟初始化 ViewModel，减少启动时的开销
+    val viewModel = remember {
+        NoteViewModel(noteRepository)
+    }
+    
+    // ✅ 从云端加载笔记和科目
+    LaunchedEffect(userId, token) {
+        if (userId.isNotEmpty() && token.isNotEmpty()) {
+            viewModel.loadNotesFromCloud(userId, token)
+            viewModel.loadSubjectsFromCloud(userId, token)
+        }
+    }
+    
+    val notes by viewModel.notes.collectAsState()
+    val subjects by viewModel.subjects.collectAsState()
+    val selectedSubject by viewModel.selectedSubject.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
+    val errorMessage by viewModel.errorMessage.collectAsState()
+    
+    // 状态管理
     var isRecording by remember { mutableStateOf(false) }
     var isTranscribing by remember { mutableStateOf(false) }
-    var transcriptResult by remember { mutableStateOf<String?>(null) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    var notes by remember { mutableStateOf<List<String>>(emptyList()) }
+    var isRecognizing by remember { mutableStateOf(false) }
+    var isShowingCamera by remember { mutableStateOf(false) }
+    var isShowingEdit by remember { mutableStateOf(false) }
+    var editingNote by remember { mutableStateOf<NoteEntity?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
     
+    // 🔍 使用云端搜索笔记，添加防抖延迟
+    LaunchedEffect(searchQuery, userId, token) {
+        if (userId.isEmpty() || token.isEmpty()) return@LaunchedEffect
+        
+        kotlinx.coroutines.delay(300) // 防抖：300ms延迟
+        if (searchQuery.isNotEmpty()) {
+            viewModel.searchNotesFromCloud(userId, token, searchQuery)
+        } else {
+            // 搜索框为空时，重新从云端加载所有笔记
+            viewModel.loadNotesFromCloud(userId, token)
+        }
+    }
+    
+    // 使用 derivedStateOf 优化搜索状态计算（减少重组）
+    val isSearching = remember(searchQuery) {
+        searchQuery.isNotEmpty()
+    }
+    
+    var capturedImagePath by remember { mutableStateOf<String?>(null) }
+    var ocrResult by remember { mutableStateOf<String?>(null) }
+    var transcriptResult by remember { mutableStateOf<String?>(null) }
+    var currentAudioPath by remember { mutableStateOf<String?>(null) }
+
+    // AI功能状态
+    var aiPolishedContent by remember { mutableStateOf<String?>(null) }
+    var aiSummary by remember { mutableStateOf<NoteSummary?>(null) }
+    var aiGeneratedTitle by remember { mutableStateOf<String?>(null) }
+    var aiEnhancedPoints by remember { mutableStateOf<List<String>?>(null) }
+    var aiAnswer by remember { mutableStateOf<String?>(null) }
+    var aiQuestion by remember { mutableStateOf("") }
+    var showingAIDialog by remember { mutableStateOf(false) }
+    var aiProcessingNoteId by remember { mutableStateOf<String?>(null) }
+    // 保存当前正在处理的笔记对象，用于应用AI结果
+    var currentAINote by remember { mutableStateOf<NoteEntity?>(null) }
+    // AI对话界面状态
+    var showingAIChatDialog by remember { mutableStateOf(false) }
+    val qwenAIService = remember { 
+        try {
+            QwenAIService()
+        } catch (e: Exception) {
+            android.util.Log.e("NoteScreen", "初始化QwenAIService失败", e)
+            // 如果初始化失败，创建一个默认实例（虽然可能无法使用，但不会导致崩溃）
+            QwenAIService()
+        }
+    }
+    
+    // 录音完成广播接收器
+    val recordingReceiver = remember {
+        object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                android.util.Log.d("NoteScreen", "收到广播: action=${intent?.action}")
+                when (intent?.action) {
+                    AudioRecordService.ACTION_RECORDING_COMPLETE -> {
+                        val audioPath = intent?.getStringExtra(AudioRecordService.EXTRA_AUDIO_PATH)
+                        android.util.Log.d("NoteScreen", "收到录音完成广播，音频路径: $audioPath")
+                        
+                        // 立即保存音频路径，确保即使转写失败也能保存录音
+                        currentAudioPath = audioPath
+                        isRecording = false
+                        
+                        // 自动转写（在协程中执行，不阻塞主线程）
+                        if (audioPath != null) {
+                            android.util.Log.d("NoteScreen", "开始转写音频: $audioPath")
+                            scope.launch {
+                                try {
+                                    isTranscribing = true
+                                    android.util.Log.d("NoteScreen", "调用转写服务...")
+                                    val transcript = viewModel.transcribeAudioNow(audioPath)
+                                    android.util.Log.d("NoteScreen", "转写完成，结果长度: ${transcript.length}")
+                                    transcriptResult = transcript
+                                } catch (e: Exception) {
+                                    android.util.Log.e("NoteScreen", "转写失败", e)
+                                    // 转写失败时，不设置 transcriptResult，但保留 currentAudioPath
+                                    // 这样用户仍然可以保存录音文件
+                                    transcriptResult = null
+                                    viewModel.setError("转写失败: ${e.message}，但录音已保存，您可以手动保存笔记")
+                                } finally {
+                                    isTranscribing = false
+                                }
+                            }
+                        } else {
+                            android.util.Log.w("NoteScreen", "音频路径为空，无法转写")
+                            viewModel.setError("录音完成但音频路径为空")
+                        }
+                    }
+                    AudioRecordService.ACTION_RECORDING_ERROR -> {
+                        val errorMessage = intent?.getStringExtra(AudioRecordService.EXTRA_ERROR_MESSAGE)
+                        android.util.Log.e("NoteScreen", "录音错误: $errorMessage")
+                        isRecording = false
+                        isTranscribing = false
+                        // 设置错误信息
+                        viewModel.setError(errorMessage ?: "录音失败")
+                    }
+                    AudioRecordService.ACTION_RECORDING_STARTED -> {
+                        android.util.Log.d("NoteScreen", "录音已开始")
+                        isRecording = true
+                    }
+                }
+            }
+        }
+    }
+    
+    // 注册广播接收器
+    DisposableEffect(Unit) {
+        val filter = IntentFilter().apply {
+            addAction(AudioRecordService.ACTION_RECORDING_COMPLETE)
+            addAction(AudioRecordService.ACTION_RECORDING_ERROR)
+            addAction(AudioRecordService.ACTION_RECORDING_STARTED)
+        }
+        android.util.Log.d("NoteScreen", "注册广播接收器: ${AudioRecordService.ACTION_RECORDING_COMPLETE}")
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                context.registerReceiver(recordingReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                android.util.Log.d("NoteScreen", "广播接收器已注册 (Android S+)")
+            } else {
+                @Suppress("DEPRECATION")
+                context.registerReceiver(recordingReceiver, filter)
+                android.util.Log.d("NoteScreen", "广播接收器已注册 (Android < S)")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("NoteScreen", "注册广播接收器失败", e)
+        }
+        onDispose {
+            try {
+                android.util.Log.d("NoteScreen", "注销广播接收器")
+                context.unregisterReceiver(recordingReceiver)
+            } catch (e: Exception) {
+                android.util.Log.w("NoteScreen", "注销广播接收器失败", e)
+            }
+        }
+    }
+    
+    // 导出助手
+    val exportHelper = remember { NoteExportHelper(context) }
+    
+    // 应用润色内容的辅助函数（使用云端更新）
+    suspend fun applyPolishedContent(note: NoteEntity) {
+        try {
+            android.util.Log.d("NoteScreen", "开始应用润色内容，原内容长度: ${note.content.length}, 新内容长度: ${aiPolishedContent!!.length}")
+            val updatedNote = note.copy(content = aiPolishedContent!!, updatedAt = System.currentTimeMillis())
+            android.util.Log.d("NoteScreen", "调用viewModel.updateNoteInCloud...")
+            // 使用云端更新方法
+            viewModel.updateNoteInCloud(userId, token, updatedNote)
+            android.util.Log.d("NoteScreen", "updateNoteInCloud完成，从云端重新加载...")
+            // 从云端重新加载笔记，确保获取最新数据
+            val reloadedNote = noteRepository.getNoteByIdFromCloud(userId, token, note.id)
+            android.util.Log.d("NoteScreen", "重新加载完成，reloadedNote: ${reloadedNote != null}")
+            // 更新editingNote和currentAINote以刷新UI - 必须在主线程更新
+            withContext(Dispatchers.Main) {
+                val finalNote = reloadedNote ?: updatedNote
+                android.util.Log.d("NoteScreen", "准备更新笔记状态")
+                android.util.Log.d("NoteScreen", "新content: ${finalNote.content.take(50)}...")
+                // 如果正在编辑这个笔记，更新editingNote
+                if (editingNote?.id == note.id) {
+                    editingNote = finalNote
+                    android.util.Log.d("NoteScreen", "✅ editingNote已更新")
+                }
+                currentAINote = finalNote
+                android.util.Log.d("NoteScreen", "✅ currentAINote已更新")
+                showingAIDialog = false
+                aiPolishedContent = null
+                android.widget.Toast.makeText(
+                    context,
+                    "润色内容已应用",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("NoteScreen", "❌ 应用润色失败", e)
+            e.printStackTrace()
+            withContext(Dispatchers.Main) {
+                android.widget.Toast.makeText(
+                    context,
+                    "应用失败: ${e.message}",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+                showingAIDialog = false
+                aiPolishedContent = null
+                currentAINote = null
+            }
+        }
+    }
+    
+    // 应用总结内容的辅助函数（使用云端更新）
+    // 注意：总结结果会覆盖原笔记内容
+    suspend fun applySummaryContent(note: NoteEntity) {
+        try {
+            // 将总结内容覆盖原笔记内容
+            val summaryText = buildString {
+                append("【摘要】\n")
+                append(aiSummary!!.summary)
+                append("\n\n【关键要点】\n")
+                aiSummary!!.keyPoints.forEach { point ->
+                    append("• $point\n")
+                }
+                if (aiSummary!!.tags.isNotEmpty()) {
+                    append("\n【标签】\n")
+                    aiSummary!!.tags.forEach { tag ->
+                        append("• $tag ")
+                    }
+                }
+                append("\n\n---\n\n")
+                append(note.content)
+            }
+            android.util.Log.d("NoteScreen", "开始应用总结内容，原内容长度: ${note.content.length}, 新内容长度: ${summaryText.length}")
+            val updatedNote = note.copy(content = summaryText, updatedAt = System.currentTimeMillis())
+            android.util.Log.d("NoteScreen", "调用viewModel.updateNoteInCloud...")
+            // 使用云端更新方法
+            viewModel.updateNoteInCloud(userId, token, updatedNote)
+            android.util.Log.d("NoteScreen", "updateNoteInCloud完成，从云端重新加载...")
+            // 从云端重新加载笔记，确保获取最新数据
+            val reloadedNote = noteRepository.getNoteByIdFromCloud(userId, token, note.id)
+            android.util.Log.d("NoteScreen", "重新加载完成，reloadedNote: ${reloadedNote != null}")
+            // 更新editingNote和currentAINote以刷新UI - 必须在主线程更新
+            withContext(Dispatchers.Main) {
+                val finalNote = reloadedNote ?: updatedNote
+                android.util.Log.d("NoteScreen", "准备更新笔记状态")
+                android.util.Log.d("NoteScreen", "新content: ${finalNote.content.take(50)}...")
+                // 如果正在编辑这个笔记，更新editingNote
+                if (editingNote?.id == note.id) {
+                    editingNote = finalNote
+                    android.util.Log.d("NoteScreen", "✅ editingNote已更新")
+                }
+                currentAINote = finalNote
+                android.util.Log.d("NoteScreen", "✅ currentAINote已更新")
+                showingAIDialog = false
+                aiSummary = null
+                android.widget.Toast.makeText(
+                    context,
+                    "总结内容已应用",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("NoteScreen", "❌ 应用总结失败", e)
+            e.printStackTrace()
+            withContext(Dispatchers.Main) {
+                android.widget.Toast.makeText(
+                    context,
+                    "应用失败: ${e.message}",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+                showingAIDialog = false
+                aiSummary = null
+                currentAINote = null
+            }
+        }
+    }
+    
+    // 极简白底设计
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.White)
+    ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
+                .padding(20.dp)
+        ) {
+            // 标题区域
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
         Text(
-            text = "智能笔记精灵",
-            style = MaterialTheme.typography.headlineMedium
-        )
-        
+                        text = "AI笔记",
+                        fontSize = 32.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.Black
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "更懂你的创作伙伴",
+                        fontSize = 16.sp,
+                        color = Color.Black.copy(alpha = 0.8f)
+                    )
+                }
+                IconButton(
+                    onClick = { isShowingEdit = true; editingNote = null },
+                    modifier = Modifier
+                        .background(
+                            color = PrimaryBlue, // 清爽蓝色背景
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                ) {
+                    Icon(Icons.Default.Add, "新建笔记", tint = Color.White)
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            // 描述文字
+            Text(
+                text = "AI全流程辅助创作\n激发创作灵感，精准润色表达，让囤积的知识变为生产力",
+                fontSize = 14.sp,
+                color = Color.Black.copy(alpha = 0.7f),
+                lineHeight = 20.sp,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+            
+            // 主体卡片 - 弥散淡蓝色毛玻璃效果
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = CardBackground // 清新淡蓝色背景
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp)
+                ) {
+                    // 搜索栏
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("搜索笔记...", color = Color.Black.copy(alpha = 0.5f)) },
+                        leadingIcon = { 
+                            Icon(
+                                Icons.Default.Search, 
+                                null,
+                                tint = Color.Black
+                            ) 
+                        },
+                        trailingIcon = if (searchQuery.isNotEmpty()) {
+                            {
+                                IconButton(onClick = { searchQuery = "" }) {
+                                    Icon(Icons.Default.Close, "清除", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                                }
+                            }
+                        } else null,
+                        singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color.Black,
+                            unfocusedBorderColor = Color.Black.copy(alpha = 0.3f),
+                            focusedTextColor = Color.Black,
+                            unfocusedTextColor = Color.Black
+                        )
+                    )
+            
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    // 科目筛选
+                    if (subjects.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (selectedSubject == null) {
+                                FilterChip(
+                                    selected = true,
+                                    onClick = { },
+                                    label = { Text("全部", fontSize = 12.sp) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.onSurface,
+                                        selectedLabelColor = MaterialTheme.colorScheme.surface
+                                    )
+                                )
+                            } else {
+                                FilterChip(
+                                    selected = false,
+                                    onClick = { viewModel.clearSubjectFilter() },
+                                    label = { Text("全部", fontSize = 12.sp) }
+                                )
+                            }
+                            subjects.forEach { subject ->
+                                FilterChip(
+                                    selected = selectedSubject == subject,
+                                    onClick = { 
+                                        if (selectedSubject == subject) {
+                                            viewModel.clearSubjectFilter()
+                                        } else {
+                                            viewModel.loadNotesBySubject(subject)
+                                        }
+                                    },
+                                    label = { Text(subject, fontSize = 12.sp) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.onSurface,
+                                        selectedLabelColor = MaterialTheme.colorScheme.surface
+                                    )
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+            
+                    // 功能按钮
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Button(
-                onClick = { /* TODO: 打开相机拍摄黑板 */ },
-                modifier = Modifier.weight(1f)
-            ) {
-                Text("拍摄黑板")
+            OutlinedButton(
+                            onClick = { isShowingCamera = true },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(24.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = Color.White,
+                                contentColor = Color.Black
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color.Black)
+                        ) {
+                            Icon(Icons.Default.CameraAlt, null, modifier = Modifier.size(20.dp), tint = Color.Black)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("拍黑板", fontSize = 14.sp, color = Color.Black)
             }
             
-            Button(
+            OutlinedButton(
                 onClick = { 
                     if (!isRecording) {
-                        // 开始录音
+                            // 检查权限
+                            if (!audioPermissionState.allPermissionsGranted) {
+                                audioPermissionState.launchMultiplePermissionRequest()
+                                return@OutlinedButton
+                            }
+                            
+                            // 检查是否有 RECORD_AUDIO 权限
+                            if (ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.RECORD_AUDIO
+                                ) != PackageManager.PERMISSION_GRANTED
+                            ) {
+                                audioPermissionState.launchMultiplePermissionRequest()
+                                return@OutlinedButton
+                            }
+                            
                         val intent = Intent(context, AudioRecordService::class.java).apply {
                             action = AudioRecordService.ACTION_START_RECORDING
                         }
+                            try {
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                         context.startForegroundService(intent)
+                                } else {
+                                    @Suppress("DEPRECATION")
+                                    context.startService(intent)
+                                }
                         isRecording = true
-                        errorMessage = null
                         transcriptResult = null
+                                currentAudioPath = null
+                            } catch (e: Exception) {
+                                // 处理启动服务失败的情况
+                                e.printStackTrace()
+                            }
                     } else {
                         // 停止录音
                         val intent = Intent(context, AudioRecordService::class.java).apply {
                             action = AudioRecordService.ACTION_STOP_RECORDING
                         }
+                            try {
                         context.startService(intent)
+                                // 立即更新UI状态，不等待广播
                         isRecording = false
-                        
-                        // 等待录音文件生成后转写
-                        // 注意：实际应该通过BroadcastReceiver接收录音完成事件
-                        // 这里简化处理，需要手动触发转写
+                            } catch (e: Exception) {
+                                // 如果服务启动失败，强制更新状态
+                                isRecording = false
+                                viewModel.setError("停止录音失败: ${e.message}")
+                            }
                     }
                 },
                 modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(
+                            shape = RoundedCornerShape(24.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
                     containerColor = if (isRecording) 
-                        MaterialTheme.colorScheme.error 
-                    else 
-                        MaterialTheme.colorScheme.primary
-                )
+                                    AccentCoral // 录音中显示红色
+                                else 
+                                    Color.White, // 白底
+                    contentColor = Color.Black
+                ),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color.Black)
+                        ) {
+                            Icon(
+                                if (isRecording) Icons.Default.Stop else Icons.Default.Mic,
+                                null,
+                                modifier = Modifier.size(20.dp),
+                                tint = Color.Black
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                if (isRecording) "停止录音" else "开始录音",
+                                fontSize = 14.sp,
+                                color = Color.Black
+                            )
+                        }
+
+            OutlinedButton(
+                onClick = {
+                    navController?.navigate("scan?autoStart=true")
+                },
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(24.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = Color.White,
+                    contentColor = Color.Black
+                ),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color.Black)
             ) {
-                Text(if (isRecording) "停止录音" else "开始录音")
+                Icon(Icons.Default.Search, null, modifier = Modifier.size(20.dp), tint = Color.Black)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("拍习题", fontSize = 14.sp, color = Color.Black)
             }
-        }
-        
-        // 录音中提示
+                    }
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    // 状态提示
         if (isRecording) {
             Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer
-                ),
-                modifier = Modifier.fillMaxWidth()
+                                containerColor = Color.White
+                            )
             ) {
                 Row(
                     modifier = Modifier.padding(16.dp),
@@ -101,21 +651,23 @@ fun NoteScreen() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(24.dp),
+                                    color = Color.Black
                     )
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text("正在录音中...")
+                                Text("正在录音中...", color = Color.Black)
                 }
             }
+                        Spacer(modifier = Modifier.height(8.dp))
         }
         
-        // 转写中提示
         if (isTranscribing) {
             Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                ),
-                modifier = Modifier.fillMaxWidth()
+                                containerColor = Color.White
+                            )
             ) {
                 Row(
                     modifier = Modifier.padding(16.dp),
@@ -123,26 +675,51 @@ fun NoteScreen() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(24.dp),
+                                    color = Color.Black
                     )
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text("正在转写中...")
+                                Text("正在转写中...", color = Color.Black)
                 }
             }
+                        Spacer(modifier = Modifier.height(8.dp))
         }
         
-        // 转写结果
-        transcriptResult?.let { result ->
+                    if (isRecognizing) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                                containerColor = Color.White
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    color = Color.Black
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text("正在识别中...", color = Color.Black)
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                    
+                    // OCR结果
+                    ocrResult?.let { result ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color.White
                 )
             ) {
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
+                                modifier = Modifier.padding(16.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -150,131 +727,1169 @@ fun NoteScreen() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "转写结果",
-                            style = MaterialTheme.typography.titleMedium
+                                        text = "OCR识别结果",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = Color.Black
                         )
+                                    Row {
                         TextButton(
                             onClick = { 
-                                transcriptResult = null
-                                notes = notes + result
-                            }
-                        ) {
-                            Text("保存到笔记")
+                                                scope.launch {
+                                                    try {
+                                                        viewModel.createNoteInCloud(
+                                                            userId = userId,
+                                                            token = token,
+                                                            title = "黑板笔记 ${SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date())}",
+                                                            subject = subjects.firstOrNull() ?: "其他",
+                                                            imagePaths = listOfNotNull(capturedImagePath)
+                                                        )
+                                                        // 保存成功后清除临时数据
+                                                        ocrResult = null
+                                                        capturedImagePath = null
+                                                        // 显示成功提示（通过Toast或Snackbar）
+                                                        android.widget.Toast.makeText(
+                                                            context,
+                                                            "笔记已保存",
+                                                            android.widget.Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    } catch (e: Exception) {
+                                                        viewModel.setError("保存失败: ${e.message}")
+                                                    }
+                                                }
+                                            }
+                                        ) {
+                                            Text("保存", color = Color.Black)
+                                        }
+                                        TextButton(onClick = { ocrResult = null }) {
+                                            Text("关闭", color = Color.Black.copy(alpha = 0.6f))
+                                        }
                         }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = result,
                         style = MaterialTheme.typography.bodyMedium,
+                        color = Color.Black,
                         modifier = Modifier
                             .fillMaxWidth()
                             .verticalScroll(rememberScrollState())
                     )
                 }
             }
+                        Spacer(modifier = Modifier.height(8.dp))
         }
         
-        // 错误提示
-        errorMessage?.let { error ->
+                    // 转写结果或录音文件（即使转写失败也显示）
+                    if (transcriptResult != null || currentAudioPath != null) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer
+                                containerColor = Color.White
                 )
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "错误",
+                                        text = if (transcriptResult != null) "语音转写结果" else "录音文件",
                         style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
+                                        color = Color.Black
+                                    )
+                                    Row {
+                                        TextButton(
+                                            onClick = {
+                                                scope.launch {
+                                                    try {
+                                                        // ☁️ 使用云端创建录音笔记
+                                                        viewModel.createNoteInCloud(
+                                                            userId = userId,
+                                                            token = token,
+                                                            title = "语音笔记 ${SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date())}",
+                                                            subject = subjects.firstOrNull() ?: "其他",
+                                                            imagePaths = emptyList(),
+                                                            audioPath = currentAudioPath
+                                                        )
+                                                        // 保存成功后清除临时数据
+                                                        transcriptResult = null
+                                                        currentAudioPath = null
+                                                        // 显示成功提示
+                                                        android.widget.Toast.makeText(
+                                                            context,
+                                                            "笔记已保存",
+                                                            android.widget.Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    } catch (e: Exception) {
+                                                        android.util.Log.e("NoteScreen", "保存笔记失败", e)
+                                                        viewModel.setError("保存失败: ${e.message}")
+                                                    }
+                                                }
+                                            }
+                                        ) {
+                                            Text("保存", color = Color.Black)
+                                        }
+                                        TextButton(onClick = { 
+                                            transcriptResult = null
+                                            currentAudioPath = null
+                                        }) {
+                                            Text("关闭", color = Color.Black.copy(alpha = 0.6f))
+                                        }
+                                    }
+                                }
                     Spacer(modifier = Modifier.height(8.dp))
+                                if (transcriptResult != null) {
+                                    Text(
+                                        text = transcriptResult!!,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = Color.Black,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .verticalScroll(rememberScrollState())
+                                    )
+                                } else if (currentAudioPath != null) {
+                                    Column {
+                                        Text(
+                                            text = "录音文件已保存，但转写失败。",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = Color.Black
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = "文件路径：\n$currentAudioPath",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color.Black.copy(alpha = 0.7f)
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = "您可以点击「保存」按钮保存录音文件，或手动输入笔记内容。",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color.Black.copy(alpha = 0.7f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                    
+                    // 错误提示
+                    errorMessage?.let { error ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color.White // 白底
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                     Text(
                         text = error,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
+                                    color = Color.Red, // 红色错误文字
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(onClick = { viewModel.clearError() }) {
+                                    Icon(Icons.Default.Close, "关闭", tint = Color.Red)
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                    
+                    // 笔记列表
+                    if (isLoading && notes.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    } else if (notes.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier = Modifier.padding(32.dp)
+                            ) {
+                                Text(
+                                    text = if (isSearching) "未找到相关笔记" else "暂无笔记，开始创建吧！",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = Color.Black
+                                )
+                                if (!isSearching) {
+                                    Text(
+                                        text = "提示：创建笔记后，点击笔记右上角的「⋮」菜单，即可使用AI功能（润色、总结、生成标题等）",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.Black.copy(alpha = 0.7f),
+                                        modifier = Modifier.padding(horizontal = 16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            // 使用 key 参数优化列表性能
+                            items(
+                                items = notes,
+                                key = { it.id }
+                            ) { note ->
+                                NoteItem(
+                                    note = note,
+                                    onEdit = {
+                                        editingNote = note
+                                        isShowingEdit = true
+                                    },
+                                    onDelete = {
+                scope.launch {
+                                            viewModel.deleteNote(note)
+                                        }
+                                    },
+                                    onShare = {
+                                        // 在协程中执行，避免阻塞主线程
+                                        scope.launch {
+                                            exportHelper.shareNote(note)
+                                        }
+                                    },
+                                    onExportPdf = {
+                                        // 在协程中执行导出，避免阻塞主线程
+                                        scope.launch(Dispatchers.IO) {
+                                            try {
+                                                val file = exportHelper.exportToPdf(note)
+                                                if (file != null) {
+                                                    withContext(Dispatchers.Main) {
+                                                        exportHelper.shareFile(file, "application/pdf")
+                                                        android.widget.Toast.makeText(
+                                                            context,
+                                                            "PDF导出成功",
+                                                            android.widget.Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    }
+                        } else {
+                                                    withContext(Dispatchers.Main) {
+                                                        android.widget.Toast.makeText(
+                                                            context,
+                                                            "PDF导出失败，请检查存储权限",
+                                                            android.widget.Toast.LENGTH_LONG
+                                                        ).show()
+                                                    }
+                        }
+                    } catch (e: Exception) {
+                                                withContext(Dispatchers.Main) {
+                                                    android.widget.Toast.makeText(
+                                                        context,
+                                                        "PDF导出失败: ${e.message}",
+                                                        android.widget.Toast.LENGTH_LONG
+                                                    ).show()
+                                                }
+                                                android.util.Log.e("NoteScreen", "PDF导出失败", e)
+                                            }
+                                        }
+                                    },
+                                    onExportImage = {
+                                        // 在协程中执行导出，避免阻塞主线程
+                                        scope.launch(Dispatchers.IO) {
+                                            try {
+                                                val file = exportHelper.exportToImage(note)
+                                                if (file != null) {
+                                                    withContext(Dispatchers.Main) {
+                                                        exportHelper.shareFile(file, "image/png")
+                                                        android.widget.Toast.makeText(
+                                                            context,
+                                                            "图片导出成功",
+                                                            android.widget.Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    }
+                                                } else {
+                                                    withContext(Dispatchers.Main) {
+                                                        android.widget.Toast.makeText(
+                                                            context,
+                                                            "图片导出失败，请检查存储权限",
+                                                            android.widget.Toast.LENGTH_LONG
+                                                        ).show()
+                                                    }
+                                                }
+                                            } catch (e: Exception) {
+                                                withContext(Dispatchers.Main) {
+                                                    android.widget.Toast.makeText(
+                                                        context,
+                                                        "图片导出失败: ${e.message}",
+                                                        android.widget.Toast.LENGTH_LONG
+                                                    ).show()
+                                                }
+                                                android.util.Log.e("NoteScreen", "图片导出失败", e)
+                                            }
+                                        }
+                                    },
+                                    onPolish = {
+                                        scope.launch {
+                                            try {
+                                                aiProcessingNoteId = note.id
+                                                currentAINote = note // 保存当前笔记对象
+                                                val polished = viewModel.polishNote(userId, token, note.id)
+                                                if (polished != null) {
+                                                    aiPolishedContent = polished
+                                                    showingAIDialog = true
+                                                }
+                                            } catch (e: Exception) {
+                                                viewModel.setError("AI润色失败: ${e.message}")
+                                                currentAINote = null
+                    } finally {
+                                                aiProcessingNoteId = null
+                                            }
+                                        }
+                                    },
+                                    onSummarize = {
+                                        scope.launch {
+                                            try {
+                                                aiProcessingNoteId = note.id
+                                                currentAINote = note // 保存当前笔记对象
+                                                val summary = viewModel.summarizeNote(userId, token, note.id)
+                                                if (summary != null) {
+                                                    aiSummary = summary
+                                                    showingAIDialog = true
+                                                }
+                                            } catch (e: Exception) {
+                                                viewModel.setError("AI总结失败: ${e.message}")
+                                                currentAINote = null
+                                            } finally {
+                                                aiProcessingNoteId = null
+                                            }
+                                        }
+                                    },
+                                    onGenerateTitle = {
+                                        scope.launch {
+                                            try {
+                                                aiProcessingNoteId = note.id
+                                                currentAINote = note // 保存当前笔记对象
+                                                val title = viewModel.generateTitle(userId, token, note.id)
+                                                if (title != null) {
+                                                    aiGeneratedTitle = title
+                                                    showingAIDialog = true
+                                                }
+                                            } catch (e: Exception) {
+                                                viewModel.setError("生成标题失败: ${e.message}")
+                                                currentAINote = null
+                                            } finally {
+                                                aiProcessingNoteId = null
+                                            }
+                                        }
+                                    },
+                                    onEnhancePoints = {
+                                        scope.launch {
+                                            try {
+                                                aiProcessingNoteId = note.id
+                                                currentAINote = note // 保存当前笔记对象
+                                                val points = viewModel.enhanceKnowledgePoints(userId, token, note.id)
+                                                if (points != null) {
+                                                    aiEnhancedPoints = points
+                                                    showingAIDialog = true
+                                                }
+                                            } catch (e: Exception) {
+                                                viewModel.setError("增强知识点失败: ${e.message}")
+                                                currentAINote = null
+                                            } finally {
+                                                aiProcessingNoteId = null
+                                            }
+                                        }
+                                    },
+                                    onAnswerQuestion = { question ->
+                                        scope.launch {
+                                            aiProcessingNoteId = note.id
+                                            currentAINote = note // 保存当前笔记对象
+                                            val answer = viewModel.answerQuestion(userId, token, note.id, question)
+                                            if (answer != null) {
+                                                aiAnswer = answer
+                                                showingAIDialog = true
+                                            }
+                                            aiProcessingNoteId = null
+                                        }
+                                    },
+                                    isProcessing = aiProcessingNoteId == note.id
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
         
-        // 测试按钮（用于测试语音转写）
-        Button(
-            onClick = {
-                // 测试转写功能（需要先有录音文件）
+        // AI悬浮球
+        FloatingActionButton(
+            onClick = { showingAIChatDialog = true },
+            modifier = Modifier
+                .align(androidx.compose.ui.Alignment.BottomEnd)
+                .padding(16.dp),
+            containerColor = MaterialTheme.colorScheme.onSurface,
+            contentColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(28.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.AutoAwesome,
+                contentDescription = "AI助手",
+                modifier = Modifier.size(28.dp)
+            )
+        }
+    }
+    
+    // 相机界面
+    if (isShowingCamera) {
+        CameraPreview(
+            onImageCaptured = { imagePath ->
+                isShowingCamera = false
+                capturedImagePath = imagePath
                 scope.launch {
                     try {
-                        isTranscribing = true
-                        errorMessage = null
-                        
-                        // 查找最新的录音文件
-                        val audioDir = File(context.getExternalFilesDir("audio")?.absolutePath ?: "")
-                        val audioFiles = audioDir.listFiles()?.filter { it.name.endsWith(".m4a") || it.name.endsWith(".pcm") }
-                        val latestFile = audioFiles?.maxByOrNull { it.lastModified() }
-                        
-                        if (latestFile != null && latestFile.exists()) {
-                            val result = speechService.transcribe(latestFile.absolutePath)
-                            transcriptResult = result
-                        } else {
-                            errorMessage = "未找到录音文件，请先录音"
-                        }
+                        isRecognizing = true
+                        val result = viewModel.recognizeImage(imagePath)
+                        ocrResult = result
                     } catch (e: Exception) {
-                        errorMessage = "转写失败: ${e.message}"
+                        // 错误已在ViewModel中处理
                     } finally {
-                        isTranscribing = false
+                        isRecognizing = false
                     }
                 }
             },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("测试转写（需要先录音）")
+            onCancel = { isShowingCamera = false },
+            onPickFromGallery = {
+                // TODO: 实现从相册选择图片的功能
+                isShowingCamera = false
+            }
+        )
+    }
+
+    // 编辑界面
+    if (isShowingEdit) {
+        // 使用key确保editingNote变化时NoteEditScreen会重新组合
+        // 使用id、content的hashCode和updatedAt作为key，确保内容变化时也能触发重新组合
+        val editKey = remember(editingNote?.id, editingNote?.content?.hashCode(), editingNote?.updatedAt) {
+            "${editingNote?.id ?: "new"}_${editingNote?.content?.hashCode() ?: 0}_${editingNote?.updatedAt ?: 0}"
         }
-        
-        Button(
-            onClick = { /* TODO: 自动合并笔记 */ },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("自动合并笔记")
+        android.util.Log.d("NoteScreen", "NoteEditScreen key: $editKey")
+        key(editKey) {
+            NoteEditScreen(
+                note = editingNote,
+                subjects = subjects,
+                onGenerateSubject = { content, title ->
+                    viewModel.generateSubject(content, title)
+                },
+            onSave = { title, subject, content, imagePaths ->
+                scope.launch {
+                    try {
+                        android.util.Log.d("NoteScreen", "========== 开始保存笔记 ==========")
+                        android.util.Log.d("NoteScreen", "标题: $title")
+                        android.util.Log.d("NoteScreen", "科目: $subject")
+                        android.util.Log.d("NoteScreen", "内容长度: ${content.length}")
+                        android.util.Log.d("NoteScreen", "图片数量: ${imagePaths.size}")
+                        android.util.Log.d("NoteScreen", "userId: $userId")
+                        android.util.Log.d("NoteScreen", "token: ${token.take(10)}...")
+                        android.util.Log.d("NoteScreen", "editingNote: ${editingNote?.id}")
+                        
+                        val currentEditingNote = editingNote
+                        if (currentEditingNote != null) {
+                            // ☁️ 使用云端更新笔记
+                            android.util.Log.d("NoteScreen", "更新笔记: ${currentEditingNote.id}")
+                            viewModel.updateNoteInCloud(userId, token, currentEditingNote.copy(
+                                title = title,
+                                subject = subject,
+                                content = content,
+                                images = imagePaths
+                            ))
+                            android.util.Log.d("NoteScreen", "✅ 笔记更新成功")
+                            android.widget.Toast.makeText(
+                                context,
+                                "笔记已更新",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        } else {
+                            // ☁️ 使用云端创建笔记
+                            android.util.Log.d("NoteScreen", "创建新笔记")
+                            viewModel.createNoteInCloud(
+                                userId = userId,
+                                token = token,
+                                title = title,
+                                subject = subject,
+                                imagePaths = imagePaths,
+                                audioPath = null
+                            )
+                            android.util.Log.d("NoteScreen", "✅ 笔记创建成功")
+                            android.widget.Toast.makeText(
+                                context,
+                                "笔记已保存",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        isShowingEdit = false
+                        editingNote = null
+                        android.util.Log.d("NoteScreen", "========== 保存完成 ==========")
+                    } catch (e: Exception) {
+                        android.util.Log.e("NoteScreen", "❌ 保存笔记失败", e)
+                        android.util.Log.e("NoteScreen", "错误类型: ${e.javaClass.simpleName}")
+                        android.util.Log.e("NoteScreen", "错误消息: ${e.message}")
+                        e.printStackTrace()
+                        viewModel.setError("保存失败: ${e.message}")
+                        android.widget.Toast.makeText(
+                            context,
+                            "保存失败: ${e.message}",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            },
+            onCancel = {
+                isShowingEdit = false
+                editingNote = null
+            }
+            )
         }
-        
-        // 笔记列表
-        if (notes.isNotEmpty()) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+    }
+    
+    // AI功能对话框
+    if (showingAIDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showingAIDialog = false
+                aiPolishedContent = null
+                aiSummary = null
+                aiGeneratedTitle = null
+                aiEnhancedPoints = null
+                aiAnswer = null
+                currentAINote = null // 清空当前AI处理的笔记
+            },
+            title = {
+                Text(
+                    text = when {
+                        aiPolishedContent != null -> "AI润色结果"
+                        aiSummary != null -> "笔记总结"
+                        aiGeneratedTitle != null -> "智能标题"
+                        aiEnhancedPoints != null -> "知识点增强"
+                        aiAnswer != null -> "AI回答"
+                        else -> "AI处理结果"
+                    },
+                    style = MaterialTheme.typography.titleLarge,
+                                        color = MaterialTheme.colorScheme.onSurface
                 )
-            ) {
+            },
+            text = {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    // 润色结果
+                    aiPolishedContent?.let { polished ->
                     Text(
-                        text = "我的笔记",
-                        style = MaterialTheme.typography.titleMedium
+                            text = polished,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    
+                    // 总结结果
+                    aiSummary?.let { summary ->
+                        Text(
+                            text = "摘要：",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = summary.summary,
+                            style = MaterialTheme.typography.bodyMedium
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    notes.forEachIndexed { index, note ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
+                        Text(
+                            text = "关键要点：",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                        )
+                        summary.keyPoints.forEach { point ->
                             Text(
-                                text = note,
+                                text = "• $point",
                                 style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(vertical = 4.dp)
+                                modifier = Modifier.padding(start = 8.dp)
                             )
+                        }
+                        if (summary.tags.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "标签：",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                modifier = Modifier.padding(start = 8.dp)
+                            ) {
+                                summary.tags.forEach { tag ->
+                                    AssistChip(
+                                        onClick = { },
+                                        label = { Text(tag, fontSize = 11.sp) },
+                                        colors = AssistChipDefaults.assistChipColors(
+                                            containerColor = MaterialTheme.colorScheme.surface,
+                                            labelColor = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 生成的标题
+                    aiGeneratedTitle?.let { title ->
+                            Text(
+                            text = title,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    
+                    // 增强的知识点
+                    aiEnhancedPoints?.let { points ->
+                        Text(
+                            text = "知识点：",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                        )
+                        points.forEach { point ->
+                            Text(
+                                text = "• $point",
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(start = 8.dp)
+                            )
+                        }
+                    }
+                    
+                    // AI回答
+                    aiAnswer?.let { answer ->
+                        Text(
+                            text = answer,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                when {
+                    aiPolishedContent != null -> {
                             TextButton(
                                 onClick = { 
-                                    notes = notes.filterIndexed { i, _ -> i != index }
+                                android.util.Log.d("NoteScreen", "========== 点击应用按钮（润色） ==========")
+                                android.util.Log.d("NoteScreen", "currentAINote是否为null: ${currentAINote == null}")
+                                android.util.Log.d("NoteScreen", "currentAINote.id: ${currentAINote?.id}")
+                                android.util.Log.d("NoteScreen", "aiPolishedContent长度: ${aiPolishedContent?.length}")
+                                
+                                // 应用润色结果到笔记
+                                val note = currentAINote
+                                if (note == null) {
+                                    android.util.Log.e("NoteScreen", "❌ currentAINote为null，尝试从数据库加载")
+                                    // 如果currentAINote为null，尝试从aiProcessingNoteId加载
+                                    scope.launch {
+                                        try {
+                                            val noteId = aiProcessingNoteId
+                                            if (noteId != null) {
+                                                val loadedNote = noteRepository.getNoteById(noteId)
+                                                if (loadedNote != null) {
+                                                    applyPolishedContent(loadedNote)
+                                                } else {
+                                                    withContext(Dispatchers.Main) {
+                                                        android.widget.Toast.makeText(
+                                                            context,
+                                                            "错误：未找到要编辑的笔记",
+                                                            android.widget.Toast.LENGTH_SHORT
+                                                        ).show()
+                                                        showingAIDialog = false
+                                                        aiPolishedContent = null
+                                                        currentAINote = null
+                                                    }
+                                                }
+                                            } else {
+                                                withContext(Dispatchers.Main) {
+                                                    android.widget.Toast.makeText(
+                                                        context,
+                                                        "错误：未找到要编辑的笔记",
+                                                        android.widget.Toast.LENGTH_SHORT
+                                                    ).show()
+                                                    showingAIDialog = false
+                                                    aiPolishedContent = null
+                                                    currentAINote = null
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("NoteScreen", "❌ 加载笔记失败", e)
+                                            withContext(Dispatchers.Main) {
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    "错误：${e.message}",
+                                                    android.widget.Toast.LENGTH_SHORT
+                                                ).show()
+                                                showingAIDialog = false
+                                                aiPolishedContent = null
+                                                currentAINote = null
+                                            }
+                                        }
+                                    }
+                                    return@TextButton
                                 }
+                                
+                                scope.launch {
+                                    applyPolishedContent(note)
+                                }
+                            }
+                        ) {
+                            Text("应用", color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                    aiSummary != null -> {
+                        TextButton(
+                            onClick = {
+                                android.util.Log.d("NoteScreen", "========== 点击应用按钮（总结） ==========")
+                                android.util.Log.d("NoteScreen", "currentAINote是否为null: ${currentAINote == null}")
+                                android.util.Log.d("NoteScreen", "currentAINote.id: ${currentAINote?.id}")
+                                android.util.Log.d("NoteScreen", "aiSummary: ${aiSummary != null}")
+                                
+                                // 应用总结结果到笔记（将摘要添加到内容开头）
+                                val note = currentAINote
+                                if (note == null) {
+                                    android.util.Log.e("NoteScreen", "❌ currentAINote为null，尝试从数据库加载")
+                                    // 如果currentAINote为null，尝试从aiProcessingNoteId加载
+                                    scope.launch {
+                                        try {
+                                            val noteId = aiProcessingNoteId
+                                            if (noteId != null) {
+                                                val loadedNote = noteRepository.getNoteById(noteId)
+                                                if (loadedNote != null) {
+                                                    applySummaryContent(loadedNote)
+                                                } else {
+                                                    withContext(Dispatchers.Main) {
+                                                        android.widget.Toast.makeText(
+                                                            context,
+                                                            "错误：未找到要编辑的笔记",
+                                                            android.widget.Toast.LENGTH_SHORT
+                                                        ).show()
+                                                        showingAIDialog = false
+                                                        aiSummary = null
+                                                        currentAINote = null
+                                                    }
+                                                }
+                                            } else {
+                                                withContext(Dispatchers.Main) {
+                                                    android.widget.Toast.makeText(
+                                                        context,
+                                                        "错误：未找到要编辑的笔记",
+                                                        android.widget.Toast.LENGTH_SHORT
+                                                    ).show()
+                                                    showingAIDialog = false
+                                                    aiSummary = null
+                                                    currentAINote = null
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("NoteScreen", "❌ 加载笔记失败", e)
+                                            withContext(Dispatchers.Main) {
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    "错误：${e.message}",
+                                                    android.widget.Toast.LENGTH_SHORT
+                                                ).show()
+                                                showingAIDialog = false
+                                                aiSummary = null
+                                                currentAINote = null
+                                            }
+                                        }
+                                    }
+                                    return@TextButton
+                                }
+                                
+                                scope.launch {
+                                    applySummaryContent(note)
+                                }
+                            }
+                        ) {
+                            Text("应用", color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                    aiGeneratedTitle != null -> {
+                        TextButton(
+                            onClick = {
+                                // 应用生成的标题
+                                val note = currentAINote
+                                if (note == null) {
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        "错误：未找到要编辑的笔记",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                    showingAIDialog = false
+                                    aiGeneratedTitle = null
+                                    currentAINote = null
+                                    return@TextButton
+                                }
+                                scope.launch {
+                                    try {
+                                        val updatedNote = note.copy(title = aiGeneratedTitle!!, updatedAt = System.currentTimeMillis())
+                                        // 使用云端更新方法
+                                        viewModel.updateNoteInCloud(userId, token, updatedNote)
+                                        // 从云端重新加载笔记
+                                        val reloadedNote = noteRepository.getNoteByIdFromCloud(userId, token, note.id)
+                                        withContext(Dispatchers.Main) {
+                                            val finalNote = reloadedNote ?: updatedNote
+                                            // 如果正在编辑这个笔记，更新editingNote
+                                            if (editingNote?.id == note.id) {
+                                                editingNote = finalNote
+                                            }
+                                            currentAINote = finalNote
+                                            showingAIDialog = false
+                                            aiGeneratedTitle = null
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "标题已应用",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("NoteScreen", "❌ 应用标题失败", e)
+                                        withContext(Dispatchers.Main) {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "应用失败: ${e.message}",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                            showingAIDialog = false
+                                            aiGeneratedTitle = null
+                                            currentAINote = null
+                                        }
+                                    }
+                                }
+                            }
+                        ) {
+                            Text("应用", color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                    aiEnhancedPoints != null -> {
+                        TextButton(
+                            onClick = {
+                                // 应用增强的知识点（使用云端更新）
+                                val note = currentAINote
+                                if (note == null) {
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        "错误：未找到要编辑的笔记",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                    showingAIDialog = false
+                                    aiEnhancedPoints = null
+                                    currentAINote = null
+                                    return@TextButton
+                                }
+                                scope.launch {
+                                    try {
+                                        val updatedNote = note.copy(knowledgePoints = aiEnhancedPoints!!, updatedAt = System.currentTimeMillis())
+                                        // 使用云端更新方法
+                                        viewModel.updateNoteInCloud(userId, token, updatedNote)
+                                        // 从云端重新加载笔记
+                                        val reloadedNote = noteRepository.getNoteByIdFromCloud(userId, token, note.id)
+                                        withContext(Dispatchers.Main) {
+                                            val finalNote = reloadedNote ?: updatedNote
+                                            // 如果正在编辑这个笔记，更新editingNote
+                                            if (editingNote?.id == note.id) {
+                                                editingNote = finalNote
+                                            }
+                                            currentAINote = finalNote
+                                            showingAIDialog = false
+                                            aiEnhancedPoints = null
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "知识点已应用",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("NoteScreen", "❌ 应用知识点失败", e)
+                                        withContext(Dispatchers.Main) {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "应用失败: ${e.message}",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                            showingAIDialog = false
+                                            aiEnhancedPoints = null
+                                            currentAINote = null
+                                        }
+                                    }
+                                }
+                            }
+                        ) {
+                            Text("应用", color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                    else -> {
+                        TextButton(
+                            onClick = {
+                                showingAIDialog = false
+                                aiPolishedContent = null
+                                aiSummary = null
+                                aiGeneratedTitle = null
+                                aiEnhancedPoints = null
+                                aiAnswer = null
+                            }
+                        ) {
+                            Text("关闭", color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showingAIDialog = false
+                        aiPolishedContent = null
+                        aiSummary = null
+                        aiGeneratedTitle = null
+                        aiEnhancedPoints = null
+                        aiAnswer = null
+                    }
+                ) {
+                    Text("取消", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
+            }
+        )
+    }
+    
+    // AI对话界面
+    if (showingAIChatDialog) {
+        AIChatDialog(
+            onDismiss = { showingAIChatDialog = false },
+            qwenAIService = qwenAIService
+        )
+    }
+}
+
+@Composable
+fun NoteItem(
+    note: NoteEntity,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onShare: () -> Unit,
+    onExportPdf: () -> Unit,
+    onExportImage: () -> Unit,
+    onPolish: () -> Unit = {},
+    onSummarize: () -> Unit = {},
+    onGenerateTitle: () -> Unit = {},
+    onEnhancePoints: () -> Unit = {},
+    onAnswerQuestion: (String) -> Unit = {},
+    isProcessing: Boolean = false
+) {
+    var showMenu by remember { mutableStateOf(false) }
+    val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+    
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onEdit), // 点击卡片查看详情
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color.White
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = note.title,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "${note.subject} • ${dateFormat.format(Date(note.createdAt))}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+                Box {
+                    if (isProcessing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                                        color = MaterialTheme.colorScheme.onSurface,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(Icons.Default.MoreVert, "更多")
+                        }
+                    }
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false },
+                        modifier = Modifier.background(PageBackground)
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("编辑", color = TextPrimary) },
+                            onClick = {
+                                showMenu = false
+                                onEdit()
+                            },
+                            leadingIcon = { Icon(Icons.Default.Edit, null, tint = PrimaryBlue) }
+                        )
+                        Divider(color = SecondaryBlue.copy(alpha = 0.2f))
+                        DropdownMenuItem(
+                            text = { Text("AI润色", color = TextPrimary) },
+                            onClick = {
+                                showMenu = false
+                                onPolish()
+                            },
+                            leadingIcon = { Icon(Icons.Default.EditNote, null, tint = PrimaryBlue) },
+                            enabled = !isProcessing
+                        )
+                        DropdownMenuItem(
+                            text = { Text("AI总结", color = TextPrimary) },
+                            onClick = {
+                                showMenu = false
+                                onSummarize()
+                            },
+                            leadingIcon = { Icon(Icons.Default.Description, null, tint = PrimaryBlue) },
+                            enabled = !isProcessing
+                        )
+                        DropdownMenuItem(
+                            text = { Text("生成标题", color = TextPrimary) },
+                            onClick = {
+                                showMenu = false
+                                onGenerateTitle()
+                            },
+                            leadingIcon = { Icon(Icons.Default.TextFields, null, tint = PrimaryBlue) },
+                            enabled = !isProcessing
+                        )
+                        DropdownMenuItem(
+                            text = { Text("增强知识点", color = TextPrimary) },
+                            onClick = {
+                                showMenu = false
+                                onEnhancePoints()
+                            },
+                            leadingIcon = { Icon(Icons.Default.Star, null, tint = PrimaryBlue) },
+                            enabled = !isProcessing
+                        )
+                        Divider(color = SecondaryBlue.copy(alpha = 0.2f))
+                        DropdownMenuItem(
+                            text = { Text("分享", color = TextPrimary) },
+                            onClick = {
+                                showMenu = false
+                                onShare()
+                            },
+                            leadingIcon = { Icon(Icons.Default.Share, null, tint = PrimaryBlue) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("导出PDF", color = TextPrimary) },
+                            onClick = {
+                                showMenu = false
+                                onExportPdf()
+                            },
+                            leadingIcon = { Icon(Icons.Default.PictureAsPdf, null, tint = PrimaryBlue) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("导出图片", color = TextPrimary) },
+                            onClick = {
+                                showMenu = false
+                                onExportImage()
+                            },
+                            leadingIcon = { Icon(Icons.Default.Image, null, tint = PrimaryBlue) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("删除", color = AccentCoral) },
+                            onClick = {
+                                showMenu = false
+                                onDelete()
+                            },
+                            leadingIcon = { Icon(Icons.Default.Delete, null, tint = AccentCoral) }
+                        )
+                    }
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            Text(
+                text = note.content.take(200) + if (note.content.length > 200) "..." else "",
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 3
+            )
+            
+            if (!note.knowledgePoints.isNullOrEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    note.knowledgePoints.take(3).forEach { point ->
+                        // 限制知识点长度，最多显示8个字符
+                        val displayText = if (point.length > 8) point.take(8) + "..." else point
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = CardBackground,
+                            modifier = Modifier.height(28.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Text("删除")
+                                Text(
+                                    text = displayText,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontSize = 11.sp,
+                                    color = PrimaryBlue,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+                    // 如果知识点超过3个，显示更多标识
+                    if (note.knowledgePoints.size > 3) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = CardBackground,
+                            modifier = Modifier.height(28.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "+${note.knowledgePoints.size - 3}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontSize = 11.sp,
+                                    color = PrimaryBlue
+                                )
                             }
                         }
                     }
@@ -283,4 +1898,3 @@ fun NoteScreen() {
         }
     }
 }
-

@@ -1,6 +1,8 @@
 package com.edusmart.app.feature.radar
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -10,8 +12,12 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun RadarScreen() {
     var isTesting by remember { mutableStateOf(false) }
-    
-    Column(
+    var showWrongQuestionScreen by remember { mutableStateOf(false) }
+
+    if (showWrongQuestionScreen) {
+        WrongQuestionScreen(onBack = { showWrongQuestionScreen = false })
+    } else {
+        Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
@@ -22,15 +28,31 @@ fun RadarScreen() {
             text = "学科知识雷达",
             style = MaterialTheme.typography.headlineMedium
         )
-        
+
         Text(
             text = "快速测评，精准定位薄弱点",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
         )
-        
+
+        // 错题本入口按钮
+        OutlinedButton(
+            onClick = {
+                showWrongQuestionScreen = true
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(
+                imageVector = Icons.Default.ErrorOutline,
+                contentDescription = "错题本",
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("📚 我的错题本")
+        }
+
         Button(
-            onClick = { 
+            onClick = {
                 isTesting = true
                 // TODO: 启动快速测评
             },
@@ -106,6 +128,7 @@ fun RadarScreen() {
                 )
             }
         }
+    }
     }
 }
 

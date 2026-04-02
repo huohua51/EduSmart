@@ -1,215 +1,338 @@
 package com.edusmart.app.feature.ar
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
+import android.util.Log
+import android.view.MotionEvent
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import androidx.activity.viewModels
 import com.google.ar.core.ArCoreApk
-import com.google.ar.core.Session
-// 暂时注释掉 SceneView 导入，因为依赖无法下载
-// import io.github.sceneview.ar.ArSceneView
-// import io.github.sceneview.ar.node.ArModelNode
-// import io.github.sceneview.loaders.ModelLoader
+import com.google.ar.core.Plane
+import io.github.sceneview.ar.ARSceneView
+import io.github.sceneview.ar.node.AnchorNode
+import io.github.sceneview.math.Position
+import io.github.sceneview.node.ModelNode
+import kotlinx.coroutines.launch
+import com.edusmart.app.R
+import com.edusmart.app.feature.ar.model.ModelItem
+import timber.log.Timber
 
-/**
- * AR知识空间Activity
- * 
- * 使用 SceneView 库实现AR功能
- * - 支持平面检测
- * - 支持3D模型加载（GLTF/GLB格式）
- * - 支持手势交互（旋转、缩放、移动）
- * 
- * 使用前需要：
- * 1. 在 assets/models/ 目录放置3D模型文件（.gltf 或 .glb）
- * 2. 在 loadModel() 方法中指定模型文件名
- */
 class ARActivity : AppCompatActivity() {
-    // 暂时注释掉 SceneView 相关变量，因为依赖无法下载
-    // private var arSceneView: ArSceneView? = null
-    private var arSession: Session? = null
-    // private var modelNode: ArModelNode? = null
-    
+
+    private lateinit var arSceneView: ARSceneView
+    private val viewModel: ARViewModel by viewModels()
+
+    private val placedAnchors = mutableListOf<AnchorNode>()
+
+    // 相机权限请求
+    private val cameraPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            checkAndSetupAR()
+        } else {
+            showPermissionDeniedDialog()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // 暂时显示提示，因为 SceneView 依赖无法下载
-        Toast.makeText(
-            this,
-            "AR功能暂时不可用\nSceneView依赖无法下载，请检查网络或稍后重试",
-            Toast.LENGTH_LONG
-        ).show()
-        finish()
-        
-        /* 原始代码暂时注释
-        // 检查ARCore支持
-        val availability = ArCoreApk.getInstance().checkAvailability(this)
-        if (availability.isTransient) {
-            // 需要重新检查
-            Toast.makeText(this, "正在检查AR支持...", Toast.LENGTH_SHORT).show()
-            return
-        }
-        
-        if (availability.isSupported) {
-            // ARCore支持，初始化AR场景
-            initializeAR()
-        } else {
-            // ARCore不支持，显示提示并退出
-            Toast.makeText(
-                this,
-                "您的设备不支持ARCore，无法使用AR功能",
-                Toast.LENGTH_LONG
-            ).show()
+        Timber.d("ARActivity onCreate开始")
+        setContentView(R.layout.activity_ar)
+        Timber.d("布局文件已设置")
+
+        findViewById<android.widget.Button>(R.id.btnBack).setOnClickListener {
+            Timber.d("返回按钮点击")
             finish()
         }
-        */
+
+        findViewById<android.widget.Button>(R.id.btnSelectModel).setOnClickListener {
+            Timber.d("选择模型按钮点击")
+            showModelSelectionDialog()
+        }
+
+        findViewById<android.widget.Button>(R.id.btnClearModels)?.setOnClickListener {
+            Timber.d("清除模型按钮点击")
+            clearAllModels()
+        }
+
+        Timber.d("开始检查相机权限")
+        // 先检查权限，再初始化AR
+        checkCameraPermission()
     }
-    
-    /* 暂时注释掉，等待 SceneView 依赖可用
-    private fun initializeAR() {
-        try {
-            // 创建AR场景视图
-            arSceneView = ArSceneView(this).apply {
-                // 启用平面检测
-                planeRenderer.isVisible = true
-                planeRenderer.isShadowReceiver = true
-                
-                // 设置场景
-                scene.skybox.isVisible = false
-                
-                // 加载3D模型
-                loadModel()
+
+    private fun checkCameraPermission() {
+        Timber.d("checkCameraPermission: 检查权限状态")
+        when {
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED -> {
+                Timber.d("相机权限已授予，开始检查AR支持")
+                // 已有权限，直接初始化AR
+                if (!checkAndSetupAR()) {
+                    Timber.w("AR检查不通过，Activity可能退出")
+                    // AR检查不通过，不继续执行
+                }
             }
-            
-            setContentView(arSceneView)
-            
-            Toast.makeText(this, "请将手机对准平面，等待模型出现", Toast.LENGTH_LONG).show()
+            shouldShowRequestPermissionRationale(Manifest.permission.CAMERA) -> {
+                Timber.d("需要显示权限解释对话框")
+                showPermissionRationaleDialog()
+            }
+            else -> {
+                Timber.d("请求相机权限")
+                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            }
+        }
+    }
+
+    private fun checkAndSetupAR(): Boolean {
+        Timber.d("checkAndSetupAR: 开始检查AR支持")
+        return try {
+            val availability = ArCoreApk.getInstance().checkAvailability(this)
+            Timber.d("ARCore可用性检查结果: $availability")
+
+            when {
+                availability.isSupported -> {
+                    Timber.i("设备支持AR，初始化AR场景")
+                    arSceneView = findViewById(R.id.arSceneView)
+                    setupARScene()
+                    true
+                }
+                availability.isTransient -> {
+                    Timber.w("AR支持检查中，稍后重试")
+                    Toast.makeText(this, "正在检查AR可用性...", Toast.LENGTH_SHORT).show()
+                    // 延迟重试
+                    android.os.Handler(mainLooper).postDelayed({
+                        checkAndSetupAR()
+                    }, 2000)
+                    false
+                }
+                else -> {
+                    Timber.e("设备不支持AR功能")
+                    showNotSupportedDialog()
+                    false
+                }
+            }
         } catch (e: Exception) {
-            android.util.Log.e("ARActivity", "AR初始化失败", e)
+            Timber.e(e, "AR支持检查异常: ${e.message}")
+            showNotSupportedDialog()
+            false
+        }
+    }
+
+    private fun setupARScene() {
+        try {
+            Timber.d("开始设置AR场景")
+            arSceneView = findViewById(R.id.arSceneView)
+            Timber.d("ARSceneView找到: ${arSceneView != null}")
+            
+            arSceneView.apply {
+                onSessionCreated = { session ->
+                    Timber.i("AR会话创建成功")
+                    runOnUiThread {
+                        Toast.makeText(
+                            this@ARActivity,
+                            "AR会话已创建，请移动设备扫描平面",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+
+                onSessionFailed = { exception ->
+                    Timber.e("AR会话创建失败: ${exception.message}", exception)
+                    runOnUiThread {
+                        Toast.makeText(
+                            this@ARActivity,
+                            "AR会话启动失败: ${exception.message}",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+
+                // 注意：SceneView 的 onTouchEvent 第二个参数是碰撞系统的 HitResult（非 ARCore HitResult）。
+                // 放置模型需要 ARCore HitResult，这里用 ARSceneView.hitTestAR() 主动做一次 ARCore hitTest。
+                onTouchEvent = { motionEvent, _ ->
+                    try {
+                        if (motionEvent.action != MotionEvent.ACTION_UP) {
+                            false
+                        } else {
+                            val selected = viewModel.selectedModel.value
+                            if (selected == null) {
+                                Toast.makeText(this@ARActivity, "请先选择模型", Toast.LENGTH_SHORT).show()
+                                true
+                            } else {
+                                val hit = hitTestAR(
+                                    xPx = motionEvent.x,
+                                    yPx = motionEvent.y,
+                                    planeTypes = setOf(
+                                        Plane.Type.HORIZONTAL_UPWARD_FACING,
+                                        Plane.Type.VERTICAL
+                                    ),
+                                    planePoseInPolygon = true,
+                                )
+
+                                if (hit != null) {
+                                    placeModelAtHit(hit, selected)
+                                    true
+                                } else {
+                                    Toast.makeText(this@ARActivity, "未检测到平面，请移动设备重试", Toast.LENGTH_SHORT).show()
+                                    false
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Timber.e(e, "触摸事件处理异常")
+                        false
+                    }
+                }
+            }
+            Timber.i("AR场景设置完成")
+        } catch (e: Exception) {
+            Timber.e(e, "AR场景设置失败: ${e.message}")
             Toast.makeText(this, "AR初始化失败: ${e.message}", Toast.LENGTH_LONG).show()
             finish()
         }
     }
-    */
-    
-    /* 暂时注释掉，等待 SceneView 依赖可用
-    /**
-     * 加载3D模型
-     * 
-     * 支持两种方式：
-     * 1. 从assets加载（推荐）- 需要先在 assets/models/ 目录放置模型文件
-     * 2. 从网络加载（需要网络连接）- 适合测试
-     * 
-     * 支持的格式：GLTF (.gltf) 或 GLB (.glb)
-     */
-    private fun ArSceneView.loadModel() {
-        try {
-            // ========== 方法1: 从assets加载（推荐） ==========
-            val modelLoader = ModelLoader(this@ARActivity)
-            
-            // 尝试加载的模型文件列表（按优先级）
-            val modelPaths = listOf(
-                "models/geometry.gltf",
-                "models/geometry.glb",
-                "models/molecule.gltf",
-                "models/physics.gltf"
-            )
-            
-            var modelLoaded = false
-            for (modelPath in modelPaths) {
-                try {
-                    // 检查模型文件是否存在
-                    val assets = this@ARActivity.assets
-                    assets.open(modelPath).close()
-                    
-                    // 加载模型
-                    val model = modelLoader.loadModel(modelPath)
-                    
-                    // 创建AR模型节点
-                    modelNode = ArModelNode().apply {
-                        // 设置模型
-                        modelInstance = model
-                        
-                        // 设置初始位置（在平面上方0.5米）
-                        // position = Vector3(0f, 0.5f, -1f)
-                        
-                        // 设置初始缩放（根据模型大小调整）
-                        // scale = Vector3(0.1f, 0.1f, 0.1f)
-                    }
-                    
-                    // 添加到场景
-                    scene.addChild(modelNode)
-                    
-                    android.util.Log.d("ARActivity", "模型加载成功: $modelPath")
-                    Toast.makeText(
-                        this@ARActivity,
-                        "模型加载成功: ${modelPath.substringAfterLast("/")}",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    modelLoaded = true
-                    break
-                } catch (e: Exception) {
-                    // 文件不存在，继续尝试下一个
-                    android.util.Log.d("ARActivity", "模型文件不存在: $modelPath")
+
+    private fun placeModelAtHit(
+        hit: com.google.ar.core.HitResult,
+        model: ModelItem
+    ) {
+        lifecycleScope.launch {
+            try {
+                val anchor = hit.createAnchor()
+                val anchorNode = AnchorNode(engine = arSceneView.engine, anchor = anchor)
+
+                // assets/model 下的文件：ModelItem.modelPath 形如 "model/cube.glb"
+                val modelInstance = arSceneView.modelLoader.loadModelInstance(model.modelPath)
+                if (modelInstance == null) {
+                    Toast.makeText(this@ARActivity, "模型加载失败: ${model.modelPath}", Toast.LENGTH_SHORT).show()
+                    anchorNode.destroy()
+                    return@launch
                 }
+
+                val modelNode = ModelNode(modelInstance = modelInstance).apply {
+                    // 统一按 XYZ 三个方向等比缩放，避免因为某一轴为 0 导致模型发黑或畸形
+                    scale = Position(model.scale, model.scale, model.scale)
+                }
+
+                anchorNode.addChildNode(modelNode)
+                arSceneView.addChildNode(anchorNode)
+
+                placedAnchors.add(anchorNode)
+                viewModel.modelPlaced()
+                Toast.makeText(this@ARActivity, "模型放置成功: ${model.name}", Toast.LENGTH_SHORT).show()
+            } catch (e: Throwable) {
+                Toast.makeText(this@ARActivity, "放置失败: ${e.message}", Toast.LENGTH_SHORT).show()
             }
-            
-            // 如果没有找到本地模型，尝试从网络加载（测试用）
-            if (!modelLoaded) {
-                android.util.Log.w("ARActivity", "未找到本地模型，尝试从网络加载测试模型")
-                loadModelFromNetwork()
-            }
-            
-        } catch (e: Exception) {
-            android.util.Log.e("ARActivity", "加载模型失败", e)
-            Toast.makeText(this@ARActivity, "加载模型失败: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
-    
-    /**
-     * 从网络加载3D模型（用于测试）
-     * 
-     * 注意：需要网络连接，且模型URL必须可访问
-     */
-    private fun ArSceneView.loadModelFromNetwork() {
-        // 示例：使用公开的测试模型URL
-        // 实际使用时，请替换为您自己的模型URL
-        val testModelUrls = listOf(
-            // 可以添加一些公开的测试模型URL
-            // "https://raw.githubusercontent.com/.../model.gltf"
-        )
-        
-        if (testModelUrls.isEmpty()) {
-            Toast.makeText(
-                this@ARActivity,
-                "未找到3D模型文件\n请下载模型到 assets/models/ 目录\n或配置网络模型URL",
-                Toast.LENGTH_LONG
-            ).show()
-            android.util.Log.w("ARActivity", "未配置模型，AR场景将只显示平面检测")
-            return
+
+    private fun clearAllModels() {
+        placedAnchors.forEach { node ->
+            try {
+                arSceneView.removeChildNode(node)
+            } catch (_: Throwable) {
+            }
+            try {
+                node.destroy()
+            } catch (_: Throwable) {
+            }
         }
-        
-        // TODO: 实现网络模型加载
-        // 注意：SceneView库可能需要额外配置才能支持网络加载
-        android.util.Log.d("ARActivity", "网络模型加载功能待实现")
+        placedAnchors.clear()
+        viewModel.clearSelection()
     }
-    */
-    
+
+    private fun showModelSelectionDialog() {
+        val models = ARConfig.getDefaultModels()
+        val modelNames = models.map { it.name }.toTypedArray()
+
+        AlertDialog.Builder(this)
+            .setTitle("选择模型")
+            .setItems(modelNames) { _, which ->
+                val selectedModel = models[which]
+                viewModel.selectModel(selectedModel)
+                Toast.makeText(this, "已选择: ${selectedModel.name}", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showNotSupportedDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("设备不支持")
+            .setMessage("您的设备不支持AR功能")
+            .setPositiveButton("确定") { _, _ ->
+                finish()
+            }
+            .setCancelable(false)
+            .show()
+    }
+
+    private fun showPermissionDeniedDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("需要相机权限")
+            .setMessage("AR功能需要相机权限，请前往系统设置授予权限")
+            .setPositiveButton("确定") { _, _ ->
+                finish()
+            }
+            .setCancelable(false)
+            .show()
+    }
+
+    private fun showPermissionRationaleDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("需要相机权限")
+            .setMessage("AR功能需要使用相机来扫描现实世界")
+            .setPositiveButton("授予权限") { _, _ ->
+                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            }
+            .setNegativeButton("取消") { _, _ ->
+                finish()
+            }
+            .setCancelable(false)
+            .show()
+    }
+
     override fun onResume() {
         super.onResume()
-        // arSceneView?.resume()
+        Timber.d("ARActivity onResume")
+        // 这里可以添加AR场景恢复逻辑
     }
-    
+
     override fun onPause() {
         super.onPause()
-        // arSceneView?.pause()
+        Timber.d("ARActivity onPause")
+        // 这里可以暂停AR场景
     }
-    
+
     override fun onDestroy() {
         super.onDestroy()
-        // modelNode = null
-        // arSceneView?.destroy()
-        // arSceneView = null
-        arSession?.close()
-        arSession = null
+        Timber.d("ARActivity onDestroy")
+        // 清理AR资源
+        try {
+            placedAnchors.forEach { node ->
+                try {
+                    arSceneView.removeChildNode(node)
+                } catch (e: Exception) {
+                    Timber.w("清理节点时出错: ${e.message}")
+                }
+                try {
+                    node.destroy()
+                } catch (e: Exception) {
+                    Timber.w("销毁节点时出错: ${e.message}")
+                }
+            }
+            placedAnchors.clear()
+        } catch (e: Exception) {
+            Timber.e("清理AR资源时出错: ${e.message}")
+        }
     }
 }
-
