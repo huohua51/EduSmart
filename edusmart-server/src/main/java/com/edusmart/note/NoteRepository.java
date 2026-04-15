@@ -7,9 +7,9 @@ import java.util.Optional;
 
 public interface NoteRepository extends JpaRepository<Note, Long> {
 
-    List<Note> findByUserIdOrderByUpdatedAtDesc(Long userId);
+    List<Note> findByUser_IdOrderByUpdatedAtDesc(Long userId);
 
-    List<Note> findByUserIdAndSubjectOrderByUpdatedAtDesc(Long userId, String subject);
+    List<Note> findByUser_IdAndSubjectOrderByUpdatedAtDesc(Long userId, String subject);
 
-    Optional<Note> findByIdAndUserId(Long id, Long userId);
+    Optional<Note> findByIdAndUser_Id(Long id, Long userId);
 }

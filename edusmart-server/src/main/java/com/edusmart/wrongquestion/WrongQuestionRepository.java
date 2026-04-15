@@ -8,12 +8,12 @@ import java.util.Optional;
 
 public interface WrongQuestionRepository extends JpaRepository<WrongQuestion, Long> {
 
-    List<WrongQuestion> findByUserIdOrderByCreatedAtDesc(Long userId);
+    List<WrongQuestion> findByUser_IdOrderByCreatedAtDesc(Long userId);
 
-    Optional<WrongQuestion> findByIdAndUserId(Long id, Long userId);
+    Optional<WrongQuestion> findByIdAndUser_Id(Long id, Long userId);
 
     @Query("SELECT wq FROM WrongQuestion wq WHERE wq.user.id = :userId AND (wq.nextReviewTime IS NULL OR wq.nextReviewTime <= :currentTime) ORDER BY wq.createdAt DESC")
     List<WrongQuestion> findDueForReview(Long userId, Long currentTime);
 
-    void deleteByIdAndUserId(Long id, Long userId);
+    void deleteByIdAndUser_Id(Long id, Long userId);
 }

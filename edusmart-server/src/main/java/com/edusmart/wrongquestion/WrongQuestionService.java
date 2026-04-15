@@ -30,7 +30,7 @@ public class WrongQuestionService {
     }
 
     public List<WrongQuestionResponse> list(AuthenticatedUser user) {
-        return wrongQuestionRepository.findByUserIdOrderByCreatedAtDesc(user.getUserId())
+        return wrongQuestionRepository.findByUser_IdOrderByCreatedAtDesc(user.getUserId())
                 .stream().map(this::toResponse).toList();
     }
 
@@ -41,7 +41,7 @@ public class WrongQuestionService {
     }
 
     public WrongQuestionResponse getById(AuthenticatedUser user, Long id) {
-        WrongQuestion wq = wrongQuestionRepository.findByIdAndUserId(id, user.getUserId())
+        WrongQuestion wq = wrongQuestionRepository.findByIdAndUser_Id(id, user.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "错题不存在"));
         return toResponse(wq);
     }
@@ -62,7 +62,7 @@ public class WrongQuestionService {
     }
 
     public WrongQuestionResponse update(AuthenticatedUser user, Long id, WrongQuestionRequest req) {
-        WrongQuestion wq = wrongQuestionRepository.findByIdAndUserId(id, user.getUserId())
+        WrongQuestion wq = wrongQuestionRepository.findByIdAndUser_Id(id, user.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "错题不存在"));
         applyRequest(wq, req);
         wq.setUpdatedAt(Instant.now());
@@ -71,9 +71,9 @@ public class WrongQuestionService {
     }
 
     public void delete(AuthenticatedUser user, Long id) {
-        wrongQuestionRepository.findByIdAndUserId(id, user.getUserId())
+        wrongQuestionRepository.findByIdAndUser_Id(id, user.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "错题不存在"));
-        wrongQuestionRepository.deleteByIdAndUserId(id, user.getUserId());
+        wrongQuestionRepository.deleteByIdAndUser_Id(id, user.getUserId());
     }
 
     private void applyRequest(WrongQuestion wq, WrongQuestionRequest req) {
