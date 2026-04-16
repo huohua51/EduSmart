@@ -8,6 +8,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
@@ -70,6 +71,7 @@ public class WrongQuestionService {
         return toResponse(wq);
     }
 
+    @Transactional
     public void delete(AuthenticatedUser user, Long id) {
         wrongQuestionRepository.findByIdAndUser_Id(id, user.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "错题不存在"));

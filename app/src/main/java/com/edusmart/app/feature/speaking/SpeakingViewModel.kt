@@ -369,9 +369,10 @@ class SpeakingViewModel(
 
         try {
             mediaRecorder?.stop()
-            mediaRecorder?.release()
         } catch (e: Exception) {
             Log.e(TAG, "停止录音失败: ${e.message}")
+        } finally {
+            try { mediaRecorder?.release() } catch (_: Exception) {}
         }
         mediaRecorder = null
 
@@ -495,6 +496,9 @@ class SpeakingViewModel(
 
                 Log.d(TAG, "✅ 完整流程执行完毕")
 
+                // 清理临时录音文件
+                try { File(audioPath).delete() } catch (_: Exception) {}
+
             } catch (e: Exception) {
                 Log.e(TAG, "❌❌❌ 流水线严重错误: ${e.message}", e)
                 _uiState.value = _uiState.value.copy(isProcessing = false)
@@ -536,8 +540,13 @@ class SpeakingViewModel(
         super.onCleared()
         // 停止TTS
         doubaoTTS.stopSpeaking()
+        // TODO: doubaoASR 缺少 release 方法，需要在 DoubaoASRService 中实现
         // 释放讯飞资源
         speechService.release()
+        // 清理临时录音文件
+        currentAudioPath?.let { path ->
+            try { java.io.File(path).delete() } catch (_: Exception) {}
+        }
         Log.d(TAG, "ViewModel 已清理")
     }
 }
