@@ -31,7 +31,7 @@ public class RadarService {
      * 根据错题分析用户的知识点掌握情况
      */
     public RadarAnalysisResponse analyze(AuthenticatedUser user) {
-        List<WrongQuestion> allWrong = wrongQuestionRepository.findByUserIdOrderByCreatedAtDesc(user.getUserId());
+        List<WrongQuestion> allWrong = wrongQuestionRepository.findByUser_IdOrderByCreatedAtDesc(user.getUserId());
 
         // 统计每个知识点出现的错题次数
         Map<String, Integer> countMap = new HashMap<>();

@@ -30,15 +30,15 @@ public class NoteService {
     public List<NoteResponse> list(AuthenticatedUser user, String subject) {
         List<Note> notes;
         if (subject != null && !subject.isBlank()) {
-            notes = noteRepository.findByUserIdAndSubjectOrderByUpdatedAtDesc(user.getUserId(), subject.trim());
+            notes = noteRepository.findByUser_IdAndSubjectOrderByUpdatedAtDesc(user.getUserId(), subject.trim());
         } else {
-            notes = noteRepository.findByUserIdOrderByUpdatedAtDesc(user.getUserId());
+            notes = noteRepository.findByUser_IdOrderByUpdatedAtDesc(user.getUserId());
         }
         return notes.stream().map(this::toResponse).toList();
     }
 
     public NoteResponse getById(AuthenticatedUser user, Long id) {
-        Note note = noteRepository.findByIdAndUserId(id, user.getUserId())
+        Note note = noteRepository.findByIdAndUser_Id(id, user.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "笔记不存在"));
         return toResponse(note);
     }
@@ -55,7 +55,7 @@ public class NoteService {
     }
 
     public NoteResponse update(AuthenticatedUser user, Long id, NoteRequest req) {
-        Note note = noteRepository.findByIdAndUserId(id, user.getUserId())
+        Note note = noteRepository.findByIdAndUser_Id(id, user.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "笔记不存在"));
         applyRequest(note, req);
         note.setUpdatedAt(Instant.now());
@@ -64,7 +64,7 @@ public class NoteService {
     }
 
     public void delete(AuthenticatedUser user, Long id) {
-        Note note = noteRepository.findByIdAndUserId(id, user.getUserId())
+        Note note = noteRepository.findByIdAndUser_Id(id, user.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "笔记不存在"));
         noteRepository.delete(note);
     }
