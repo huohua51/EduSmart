@@ -13,6 +13,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.activity.viewModels
 import com.google.ar.core.ArCoreApk
+import com.google.ar.core.Config
 import com.google.ar.core.Plane
 import io.github.sceneview.ar.ARSceneView
 import io.github.sceneview.ar.node.AnchorNode
@@ -132,10 +133,19 @@ class ARActivity : AppCompatActivity() {
             Timber.d("开始设置AR场景")
             arSceneView = findViewById(R.id.arSceneView)
             Timber.d("ARSceneView找到: ${arSceneView != null}")
-            
+
             arSceneView.apply {
                 onSessionCreated = { session ->
                     Timber.i("AR会话创建成功")
+
+                    // 配置AR会话的光照和环境设置
+                    val config = Config(session).apply {
+                        lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
+                        planeFindingMode = Config.PlaneFindingMode.HORIZONTAL
+                        focusMode = Config.FocusMode.AUTO
+                    }
+                    session.configure(config)
+
                     runOnUiThread {
                         Toast.makeText(
                             this@ARActivity,
@@ -221,6 +231,11 @@ class ARActivity : AppCompatActivity() {
                 val modelNode = ModelNode(modelInstance = modelInstance).apply {
                     // 统一按 XYZ 三个方向等比缩放，避免因为某一轴为 0 导致模型发黑或畸形
                     scale = Position(model.scale, model.scale, model.scale)
+                }
+
+                // 在AR场景层面配置光照估计
+                arSceneView.configureSession { session, config ->
+                    config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
                 }
 
                 anchorNode.addChildNode(modelNode)
