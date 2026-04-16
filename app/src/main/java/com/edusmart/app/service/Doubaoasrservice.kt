@@ -90,7 +90,7 @@ class DoubaoASRService(private val context: Context) {
             Log.d(TAG, "文件大小: ${file.length()} bytes")
 
             // 解码音频为 PCM
-            val pcmData = try {
+            val (pcmData, originalSampleRate) = try {
                 decodeAudioToPCM(audioPath)
             } catch (e: Exception) {
                 Log.e(TAG, "音频解码失败: ${e.message}")
@@ -107,7 +107,7 @@ class DoubaoASRService(private val context: Context) {
             Log.d(TAG, "PCM 数据大小: ${pcmData.size} bytes")
 
             // 重采样到 16kHz (如果需要)
-            val resampledPcm = resampleTo16k(pcmData)
+            val resampledPcm = resampleTo16k(pcmData, originalSampleRate)
             Log.d(TAG, "重采样后大小: ${resampledPcm.size} bytes")
 
             val connectId = UUID.randomUUID().toString()
@@ -429,8 +429,9 @@ class DoubaoASRService(private val context: Context) {
 
     /**
      * 解码音频文件为 PCM
+     * @return Pair of (PCM data, original sample rate)
      */
-    private fun decodeAudioToPCM(audioPath: String): ByteArray {
+    private fun decodeAudioToPCM(audioPath: String): Pair<ByteArray, Int> {
         val extractor = MediaExtractor()
         var decoder: MediaCodec? = null
         val outputStream = ByteArrayOutputStream()
@@ -506,8 +507,8 @@ class DoubaoASRService(private val context: Context) {
             }
 
             val pcmData = outputStream.toByteArray()
-            Log.d(TAG, "PCM 解码完成: ${pcmData.size} bytes")
-            return pcmData
+            Log.d(TAG, "PCM 解码完成: ${pcmData.size} bytes, sampleRate=$sampleRate")
+            return Pair(pcmData, sampleRate)
 
         } finally {
             decoder?.stop()
@@ -519,16 +520,25 @@ class DoubaoASRService(private val context: Context) {
 
     /**
      * 重采样到 16kHz
-     * 简单实现：如果原始采样率不是16k，进行简单的降采样
+     * 使用线性插值进行降采样
      */
-    private fun resampleTo16k(pcmData: ByteArray): ByteArray {
-        // 假设输入是 44.1kHz 或 48kHz，16bit
-        // 这里做一个简单的 3:1 降采样 (48k -> 16k) 或 2.75:1 (44.1k -> 16k)
-        // 实际项目中建议使用专业的重采样库如 Oboe 或 libsamplerate
+    private fun resampleTo16k(pcmData: ByteArray, originalSampleRate: Int = 44100): ByteArray {
+        if (originalSampleRate == 16000) return pcmData
 
-        // 暂时直接返回，让服务端处理
-        // 如果识别效果不好，需要实现真正的重采样
-        return pcmData
+        val ratio = originalSampleRate.toDouble() / 16000.0
+        val sampleCount = pcmData.size / 2  // 16-bit samples
+        val outputSampleCount = (sampleCount / ratio).toInt()
+        val output = ByteArray(outputSampleCount * 2)
+
+        for (i in 0 until outputSampleCount) {
+            val srcIndex = (i * ratio).toInt().coerceIn(0, sampleCount - 1)
+            val byteIndex = srcIndex * 2
+            if (byteIndex + 1 < pcmData.size) {
+                output[i * 2] = pcmData[byteIndex]
+                output[i * 2 + 1] = pcmData[byteIndex + 1]
+            }
+        }
+        return output
     }
 
     private fun gzipCompress(data: ByteArray): ByteArray {

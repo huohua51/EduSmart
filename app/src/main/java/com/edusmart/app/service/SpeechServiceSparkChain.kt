@@ -491,13 +491,15 @@ class SpeechServiceSparkChain(private val context: Context) {
             asyncChat(
                 prompt = systemPrompt,
                 onResult = { result, isComplete ->
-                    if (isComplete) {
+                    if (isComplete && continuation.isActive) {
                         continuation.resume(result)
                     }
                 },
                 onError = { error ->
                     Log.e(TAG, "AI对话生成失败: $error")
-                    continuation.resume("Sorry, I'm having trouble connecting to my brain right now. Could you try again?")
+                    if (continuation.isActive) {
+                        continuation.resume("Sorry, I'm having trouble connecting to my brain right now. Could you try again?")
+                    }
                 }
             )
         }
@@ -528,13 +530,15 @@ class SpeechServiceSparkChain(private val context: Context) {
             asyncChat(
                 prompt = prompt,
                 onResult = { result, isComplete ->
-                    if (isComplete) {
+                    if (isComplete && continuation.isActive) {
                         continuation.resume(result)
                     }
                 },
                 onError = { error ->
                     Log.e(TAG, "翻译失败: $error")
-                    continuation.resume("")
+                    if (continuation.isActive) {
+                        continuation.resume("")
+                    }
                 }
             )
         }
@@ -543,8 +547,9 @@ class SpeechServiceSparkChain(private val context: Context) {
     /**
      * 翻译：英文翻译为中文（向后兼容）
      */
-    suspend fun translateToEnglish(englishText: String): String {
-        return translateToChinese(englishText)
+    @Deprecated("Use translateToChinese instead", ReplaceWith("translateToChinese(text)"))
+    suspend fun translateToEnglish(text: String): String {
+        return translateToChinese(text)
     }
 
     /**
@@ -588,13 +593,15 @@ class SpeechServiceSparkChain(private val context: Context) {
             asyncChat(
                 prompt = prompt,
                 onResult = { result, isComplete ->
-                    if (isComplete) {
+                    if (isComplete && continuation.isActive) {
                         continuation.resume(result)
                     }
                 },
                 onError = { error ->
                     Log.e(TAG, "生成参考回复失败: $error")
-                    continuation.resume("")
+                    if (continuation.isActive) {
+                        continuation.resume("")
+                    }
                 }
             )
         }
@@ -637,7 +644,7 @@ class SpeechServiceSparkChain(private val context: Context) {
             asyncChat(
                 prompt = prompt,
                 onResult = { result, isComplete ->
-                    if (isComplete) {
+                    if (isComplete && continuation.isActive) {
                         try {
                             // 解析AI返回的场景列表
                             val scenes = result.lines()
@@ -668,7 +675,9 @@ class SpeechServiceSparkChain(private val context: Context) {
                 },
                 onError = { error ->
                     Log.e(TAG, "生成场景失败: $error")
-                    continuation.resume(emptyList())
+                    if (continuation.isActive) {
+                        continuation.resume(emptyList())
+                    }
                 }
             )
         }
@@ -1043,7 +1052,7 @@ class SpeechServiceSparkChain(private val context: Context) {
                 mIse.setParameter(SpeechConstant.RESULT_LEVEL, "complete")
                 mIse.setParameter(SpeechConstant.VAD_BOS, "5000")
                 mIse.setParameter(SpeechConstant.VAD_EOS, "1800")
-                mIse.setParameter(SpeechConstant.AUDIO_FORMAT, "wav")
+                mIse.setParameter(SpeechConstant.AUDIO_FORMAT, "pcm")
                 mIse.setParameter(SpeechConstant.SAMPLE_RATE, "16000")
 
                 Log.d(TAG, "✅ 参数配置完成")

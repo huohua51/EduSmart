@@ -4,6 +4,7 @@ import com.edusmart.app.config.SDKConfig
 import com.edusmart.app.data.entity.NoteEntity
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.*
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -203,7 +204,7 @@ class CloudBaseNoteService {
         Thread {
             try {
             val url = if (subject != null) {
-                HttpUrl.parse("$baseUrl/api/notes")!!.newBuilder()
+                "$baseUrl/api/notes".toHttpUrl().newBuilder()
                     .addQueryParameter("subject", subject)
                     .build()
                     .toString()
