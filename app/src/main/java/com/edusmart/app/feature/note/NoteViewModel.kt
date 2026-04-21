@@ -262,6 +262,7 @@ class NoteViewModel(
         token: String,
         title: String,
         subject: String,
+        content: String = "",
         imagePaths: List<String>? = null,
         audioPath: String? = null
     ): NoteEntity {
@@ -269,7 +270,7 @@ class NoteViewModel(
             Log.d("NoteViewModel", "✍️ 创建笔记到云端: title=$title")
             _isLoading.value = true
             val note = noteRepository.mergeNote(
-                userId, token, title, subject, imagePaths, audioPath
+                userId, token, title, subject, content, imagePaths, audioPath
             )
             // 重新加载列表
             loadNotesFromCloud(userId, token)

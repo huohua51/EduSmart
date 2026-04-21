@@ -15,9 +15,9 @@ object SDKConfig {
     // 注册地址: https://www.xfyun.cn/
     // 文档: https://www.xfyun.cn/doc/asr/android-sdk.html
     // 获取方式: 登录控制台 https://console.xfyun.cn/services/iat 查看三元组
-    const val XUNFEI_APP_ID = "your-xunfei-app-id"
-    const val XUNFEI_API_KEY = "your-xunfei-api-key"
-    const val XUNFEI_API_SECRET = "your-xunfei-api-secret"
+    const val XUNFEI_APP_ID = "bddbdddc"
+    const val XUNFEI_API_KEY = "7e5660798385addf9d13b73cde5eb6d0"
+    const val XUNFEI_API_SECRET = "ZjM4ZTE1OThmNGIyOTA5MTFmN2EwNmUz"
     
     // ========== 百度SDK配置 ==========
     // 注册地址: https://ai.baidu.com/
@@ -29,9 +29,9 @@ object SDKConfig {
 
     // ========== 豆包TTS语音合成配置 ==========
     // 官方文档: https://www.volcengine.com/docs/6561/79824
-    const val DOUBAO_APP_ID = "your-doubao-app-id"
-    const val DOUBAO_ACCESS_TOKEN = "your-doubao-access-token"
-    const val DOUBAO_SECRET_KEY = "your-doubao-secret-key"
+    const val DOUBAO_APP_ID = "7638408005"
+    const val DOUBAO_ACCESS_TOKEN = "Jt1APcCxsGKfhdh6Cqv4kNbSTZWcHx9H"
+    const val DOUBAO_SECRET_KEY = "gO62aF3BaiQYXhDevOiCQyrNQZ24w-g3"
     const val DOUBAO_MODEL_ID = "seed-tts-2.0"
     
     // Claude API (Anthropic)
@@ -49,12 +49,27 @@ object SDKConfig {
     
     // 通义千问API (阿里云)
     // 注册地址: https://dashscope.aliyun.com/
-    const val TONGYI_API_KEY = "your-tongyi-api-key"
+    const val TONGYI_API_KEY = "sk-2c11207fb7a84dbb985f93cf3edf648a"
     
-    // ========== Java 后端配置（Spring Boot） ==========
-    // 本地开发：Android 模拟器访问宿主机用 10.0.2.2
-    // 真机：改成你电脑局域网 IP（例如 192.168.1.xx），并确保 8080 端口放通
-    const val JAVA_API_BASE_URL = "http://10.0.2.2:8080"
+    // ========== EduSmart 后端（Spring Boot + Spring AI）==========
+    // 登录/注册、笔记 CRUD、AI 能力都走这里。
+    // - Android 模拟器访问宿主机：http://10.0.2.2:8080
+    // - 真机 / 局域网：http://<服务器 IP>:8080
+    // - 线上：https://api.example.com
+    // 注意：本地开发若使用明文 HTTP，记得在 AndroidManifest 中允许 usesCleartextTraffic。
+    const val SERVER_BASE_URL = "http://10.0.2.2:8080"
+
+    /** API 根路径，拼接后形如 http://xxx/api。 */
+    val SERVER_API_BASE_URL: String
+        get() = "$SERVER_BASE_URL/api"
+
+    // ========== 腾讯云开发配置（仅错题模块仍在使用） ==========
+    // 登录注册 / 智能笔记 / AI 已迁移到 Spring Boot 后端（SERVER_BASE_URL），
+    // 下列常量保留用于错题同步等尚未迁移的模块。
+    const val TCB_ENV_ID = "edusmart-dev-3gqo04ike66344ea-1327750873"
+    const val TCB_REGION = "ap-shanghai"
+    val TCB_API_BASE_URL: String
+        get() = "https://$TCB_ENV_ID.$TCB_REGION.app.tcloudbase.com"
     
     // ========== 阿里云函数计算配置 ==========
     // 控制台: https://fcnext.console.aliyun.com/

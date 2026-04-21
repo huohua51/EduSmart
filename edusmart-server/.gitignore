@@ -1,6 +1,25 @@
-.gradle/
+target/
 build/
-out/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### IDE
 .idea/
 *.iml
+*.iws
+*.ipr
+.vscode/
+.settings/
+.project
+.classpath
+
+### Runtime data
+/data/
+/uploads/
+/logs/
+*.log
+
+### OS
 .DS_Store
+Thumbs.db

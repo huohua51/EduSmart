@@ -15,6 +15,7 @@ class EduSmartApplication : Application() {
         super.onCreate()
         android.util.Log.d("EduSmartApplication", "========== Application onCreate 开始 ==========")
         instance = this
+        val isDebugVariant = packageName.endsWith(".debug")
         
         // 初始化Timber日志库
         if (BuildConfig.DEBUG) {
@@ -34,7 +35,9 @@ class EduSmartApplication : Application() {
         android.util.Log.d("EduSmartApplication", "APIKey: ${SDKConfig.XUNFEI_API_KEY.take(10)}...")
         
         try {
-            if (SDKConfig.XUNFEI_APP_ID != "your-xunfei-app-id" &&
+            if (isDebugVariant) {
+                android.util.Log.w("EduSmartApplication", "Debug 构建跳过 SparkChain 初始化，仅保留联调所需功能")
+            } else if (SDKConfig.XUNFEI_APP_ID != "your-xunfei-app-id" &&
                 SDKConfig.XUNFEI_API_KEY != "your-xunfei-api-key" &&
                 SDKConfig.XUNFEI_API_SECRET != "your-xunfei-api-secret") {
                 android.util.Log.d("EduSmartApplication", "配置检查通过，开始初始化...")

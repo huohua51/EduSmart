@@ -142,6 +142,7 @@ class NoteRepository(
         token: String,
         title: String,
         subject: String,
+        content: String,
         imagePaths: List<String>?,
         audioPath: String?
     ): NoteEntity {
@@ -159,8 +160,15 @@ class NoteRepository(
         } ?: ""
         
         val mergedContent = buildString {
-            imageTexts.forEach { append(it).append("\n\n") }
+            if (content.isNotBlank()) {
+                append(content.trim())
+            }
+            imageTexts.forEach { imageText ->
+                if (isNotEmpty()) append("\n\n")
+                append(imageText)
+            }
             if (audioText.isNotEmpty()) {
+                if (isNotEmpty()) append("\n\n")
                 append("【语音转写】\n").append(audioText)
             }
         }

@@ -52,6 +52,7 @@
         android:theme="@style/Theme.EduSmart"
         android:enableOnBackInvokedCallback="true"
         android:extractNativeLibs="true"
+        android:usesCleartextTraffic="true"
         tools:targetApi="31">
         
         <activity

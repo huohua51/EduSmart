@@ -1,27 +1,67 @@
 server:
   port: 8080
+  servlet:
+    context-path: /
+  # 允许上传较大的头像 / 笔记附件（base64 编码后会膨胀约 33%）
+  tomcat:
+    max-http-form-post-size: 20MB
 
 spring:
   application:
     name: edusmart-server
+
+  # JSON 大小限制（MultipartFile 不走这里；但 base64 以 JSON body 上传时这里才是关键）
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 20MB
+
+  # ===== 数据源：默认使用 H2 文件数据库，开箱即用 =====
   datasource:
-    url: jdbc:mysql://localhost:3306/edusmart?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8
-    username: root
-    password: ${DB_PASSWORD:root}
+    # H2 2.x 下 AUTO_SERVER=TRUE 与 DB_CLOSE_ON_EXIT=FALSE 的组合会报不支持。
+    # 本项目本地单进程启动即可，去掉 AUTO_SERVER，保留文件库 + MySQL 兼容模式。
+    url: jdbc:h2:file:./data/edusmart;DB_CLOSE_ON_EXIT=FALSE;MODE=MySQL
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+
   jpa:
     hibernate:
       ddl-auto: update
-    show-sql: false
+    open-in-view: false
     properties:
       hibernate:
-        format_sql: true
+        format_sql: false
 
-jwt:
-  secret: ${JWT_SECRET:change-this-to-a-long-random-string-at-least-256-bits-for-hs256}
-  expiration-ms: 2592000000
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+      settings:
+        web-allow-others: false
 
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info
+# ===== 业务自定义配置 =====
+edusmart:
+  # Token 过期时间（毫秒），默认 30 天
+  token-ttl-ms: 2592000000
+  # 文件本地存储目录（相对于启动目录）
+  upload-dir: ./uploads
+  # 静态文件对外暴露路径前缀
+  public-file-prefix: /files
+  # 对外基础 URL；用于拼接返回给客户端的附件地址
+  # 默认空字符串时，返回相对路径；部署时建议填写：例如 http://192.168.1.100:8080
+  public-base-url: ""
+  ai:
+    dashscope:
+      # 直接调用 DashScope 原生 Generation 接口
+      base-url: https://dashscope.aliyuncs.com
+      # 优先读取官方示例里的 DASHSCOPE_API_KEY，兼容旧变量名
+      api-key: ${DASHSCOPE_API_KEY:${ALIYUN_MAAS_API_KEY:${TONGYI_API_KEY:not-configured}}}
+      # 按官方示例改为原生常用模型
+      model: qwen-plus
+      timeout-seconds: 30
+
+logging:
+  level:
+    root: INFO
+    com.edusmart.server: DEBUG

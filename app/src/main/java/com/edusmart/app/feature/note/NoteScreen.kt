@@ -1230,6 +1230,7 @@ fun NoteScreen(navController: androidx.navigation.NavController? = null) {
                                 token = token,
                                 title = title,
                                 subject = subject,
+                                content = content,
                                 imagePaths = imagePaths,
                                 audioPath = null
                             )
